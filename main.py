@@ -155,20 +155,21 @@ def preprocess_image(image):
     return l_image_tensor, ab_image_tensor
 
 
-def load_images():
+def load_images(data_size):
     all_people = os.listdir("./data/lfw")
-    l_images = []
-    ab_images = []
-    all_people = all_people[0:100]          # TODO: kom ihåg att ta bort för att träna hela
+    l_images = np.empty(data_size, dtype=object)
+    ab_images = np.empty(data_size, dtype=object)
+    i = 0
     for folder_for_person in all_people:
         all_images_on_person = os.listdir(f"./data/lfw/{folder_for_person}")
         for image_on_person in all_images_on_person:
+            if i >= data_size:
+                return l_images, ab_images
             img_as_array = np.asarray(Image.open(f"./data/lfw/{folder_for_person}/{image_on_person}"))
             l_img, ab_img = preprocess_image(img_as_array)
-            l_images.append(l_img)
-            ab_images.append(ab_img)
-    l_images = np.array(l_images, dtype=object)
-    ab_images = np.array(ab_images, dtype=object)
+            l_images[i] = l_img
+            ab_images[i] = ab_img
+            i += 1
     return l_images, ab_images
 
 
@@ -222,14 +223,16 @@ def main():
     model = ColorizationNet()
 
     # Parameters.
-    batch_size = 4
+    batch_size = 10
+    data_size = 100
     learning_rate = 0.001
 
     # Load & preprocess images.
-    l_images, ab_images = load_images()
+    l_images, ab_images = load_images(data_size)
 
     # Split and shuffle training- and test sets.
-    train_X, test_X, train_Y, test_Y = train_test_split(l_images, ab_images, test_size=0.2, stratify=ab_images)
+    # train_X, test_X, train_Y, test_Y = train_test_split(l_images, ab_images, test_size=0.2, stratify=ab_images)
+    train_X, test_X, train_Y, test_Y = train_test_split(l_images, ab_images, test_size=0.2)
     # TODO: vad fan är stratify?
 
     # Show random image.
