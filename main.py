@@ -5,7 +5,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch.optim as optim
 import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
 import torch.nn.functional as F
+from PIL import Image
+import random
+import sklearn
+from sklearn.model_selection import train_test_split
+import os
+from skimage import color
 
 
 class ColorizationNet(nn.Module):
@@ -116,19 +123,151 @@ class ColorizationNet(nn.Module):
         return in_ab*self.ab_norm
 
 
+class LFWDataset(Dataset):
+    def __init__(self, X, Y):       # TODO: lägga till transform?
+        self.X = X
+        self.Y = Y
+        pass
+
+    def __getitem__(self, index):
+        return self.X[index], self.Y[index]
+
+    def __len__(self):
+        return len(self.X)
+
+
+def resize_image(image, h=256, w=256, resample=3):
+    return np.asarray(Image.fromarray(image).resize((h, w), resample=resample))
+
+
+def preprocess_image(image):
+    """
+    Resize and split image into L and ab channels.
+    :param image: RGB-image
+    :return:
+    """
+    image = resize_image(image)
+    lab_image = color.rgb2lab(image)
+    l_image = lab_image[:, :, 0]
+    ab_image = lab_image[:, :, 1:]
+    l_image_tensor = torch.Tensor(l_image)[None, None, :, :]
+    ab_image_tensor = torch.Tensor(ab_image)[None, None, :, :]
+    return l_image_tensor, ab_image_tensor
+
+
+def load_images():
+    all_people = os.listdir("./data/lfw")
+    l_images = []
+    ab_images = []
+    all_people = all_people[0:100]          # TODO: kom ihåg att ta bort för att träna hela
+    for folder_for_person in all_people:
+        all_images_on_person = os.listdir(f"./data/lfw/{folder_for_person}")
+        for image_on_person in all_images_on_person:
+            img_as_array = np.asarray(Image.open(f"./data/lfw/{folder_for_person}/{image_on_person}"))
+            l_img, ab_img = preprocess_image(img_as_array)
+            l_images.append(l_img)
+            ab_images.append(ab_img)
+    l_images = np.array(l_images, dtype=object)
+    ab_images = np.array(ab_images, dtype=object)
+    return l_images, ab_images
+
+
+def train(model, trainloader, criterion, optimizer):
+    for epoch in range(2):  # loop over the dataset multiple times
+
+        running_loss = 0.0
+        for i, data in enumerate(trainloader, 0):
+            # get the inputs; data is a list of [inputs, labels]
+            inputs, labels = data
+
+            # zero the parameter gradients
+            optimizer.zero_grad()
+
+            # forward + backward + optimize
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+
+            # print statistics
+            running_loss += loss.item()
+            if i % 2000 == 1999:  # print every 2000 mini-batches
+                print('[%d, %5d] loss: %.3f' %
+                      (epoch + 1, i + 1, running_loss / 2000))
+                running_loss = 0.0
+
+    print('Finished Training')
+
+
+def test(model, testloader):
+    correct = 0
+    total = 0
+    # since we're not training, we don't need to calculate the gradients for our outputs
+    with torch.no_grad():
+        for data in testloader:
+            images, labels = data
+            # calculate outputs by running images through the network
+            outputs = model(images)
+            # the class with the highest energy is what we choose as prediction
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+
+    print('Accuracy of the network on the 10000 test images: %d %%' % (
+            100 * correct / total))
+
+
 def main():
+    # CNN.
     model = ColorizationNet()
 
-    transform = transforms.Compose(
-        [transforms.ToTensor(),
-         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
-
+    # Parameters.
     batch_size = 4
+    learning_rate = 0.001
 
-    trainset = torchvision.datasets.CIFAR10(root='./data', train=True,
-                                            download=True, transform=transform)
+    # Load & preprocess images.
+    l_images, ab_images = load_images()
 
-    print(type(trainset))
+    # Split and shuffle training- and test sets.
+    train_X, test_X, train_Y, test_Y = train_test_split(l_images, ab_images, test_size=0.2, stratify=ab_images)
+    # TODO: vad fan är stratify?
+
+    # Show random image.
+    # random_image = random.randint(0, len(images))
+    # plt.imshow(images[random_image])
+    # plt.title(f"Training example #{random_image}")
+    # plt.axis('off')
+    # plt.show()
+
+    # Training data.
+    # trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
+    # trainset = torchvision.datasets.ImageNet(root='./data', train=True, download=True, transform=transform)
+    trainset = LFWDataset(train_X, train_Y)
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=2)
+
+    # Test data.
+    # testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
+    # testset = torchvision.datasets.ImageNet(root='./data', train=False, download=True, transform=transform)
+    testset = LFWDataset(test_X, test_Y)
+    testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=2)
+
+    # Loss function.
+    criterion_mse = nn.MSELoss()
+    criterion_ce = nn.CrossEntropyLoss()
+    # criterion_mce = våran egen
+
+    # Optimizer.
+    optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9)
+
+    # Train the network.
+    train(model, trainloader, criterion_mse, optimizer)
+
+    # Save the trained network.
+    PATH = './colorize_cnn.pth'
+    torch.save(model.state_dict(), PATH)
+
+    # Test the network.
+    test(model, testloader)
 
 
 if __name__ == '__main__':
