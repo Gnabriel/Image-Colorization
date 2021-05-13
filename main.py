@@ -124,13 +124,14 @@ class ColorizationNet(nn.Module):
 
 
 class LFWDataset(Dataset):
-    def __init__(self, X, Y):       # TODO: lägga till transform?
+    def __init__(self, X, Y, transform):       # TODO: lägga till transform?
         self.X = X
         self.Y = Y
-        pass
+        self.transform = transform
 
     def __getitem__(self, index):
-        return self.X[index], self.Y[index]
+        l_image, ab_image = self.X[index], self.Y[index]
+        return self.transform(l_image), self.transform(ab_image)
 
     def __len__(self):
         return len(self.X)
@@ -150,26 +151,27 @@ def preprocess_image(image):
     lab_image = color.rgb2lab(image)
     l_image = lab_image[:, :, 0]
     ab_image = lab_image[:, :, 1:]
-    l_image_tensor = torch.Tensor(l_image)[None, None, :, :]
-    ab_image_tensor = torch.Tensor(ab_image)[None, None, :, :]
-    return l_image_tensor, ab_image_tensor
+    return l_image, ab_image
 
 
 def load_images(data_size):
     all_people = os.listdir("./data/lfw")
-    l_images = np.empty(data_size, dtype=object)
-    ab_images = np.empty(data_size, dtype=object)
+    l_images = np.empty((data_size, 256, 256))
+    ab_images = np.empty((data_size, 256, 256, 2))
     i = 0
     for folder_for_person in all_people:
         all_images_on_person = os.listdir(f"./data/lfw/{folder_for_person}")
         for image_on_person in all_images_on_person:
             if i >= data_size:
-                return l_images, ab_images
+                break
             img_as_array = np.asarray(Image.open(f"./data/lfw/{folder_for_person}/{image_on_person}"))
             l_img, ab_img = preprocess_image(img_as_array)
             l_images[i] = l_img
             ab_images[i] = ab_img
             i += 1
+    # Convert from float64 to uint8
+    l_images = (255 * l_images.astype(np.float64)).astype(np.uint8)
+    ab_images = (255 * ab_images.astype(np.float64)).astype(np.uint8)
     return l_images, ab_images
 
 
@@ -191,11 +193,11 @@ def train(model, trainloader, criterion, optimizer):
             optimizer.step()
 
             # print statistics
-            running_loss += loss.item()
-            if i % 2000 == 1999:  # print every 2000 mini-batches
-                print('[%d, %5d] loss: %.3f' %
-                      (epoch + 1, i + 1, running_loss / 2000))
-                running_loss = 0.0
+            # running_loss += loss.item()
+            # if i % 2000 == 1999:  # print every 2000 mini-batches
+            #     print('[%d, %5d] loss: %.3f' %
+            #           (epoch + 1, i + 1, running_loss / 2000))
+            #     running_loss = 0.0
 
     print('Finished Training')
 
@@ -223,8 +225,8 @@ def main():
     model = ColorizationNet()
 
     # Parameters.
-    batch_size = 10
-    data_size = 100
+    data_size = 300
+    batch_size = 1
     learning_rate = 0.001
 
     # Load & preprocess images.
@@ -233,25 +235,18 @@ def main():
     # Split and shuffle training- and test sets.
     # train_X, test_X, train_Y, test_Y = train_test_split(l_images, ab_images, test_size=0.2, stratify=ab_images)
     train_X, test_X, train_Y, test_Y = train_test_split(l_images, ab_images, test_size=0.2)
-    # TODO: vad fan är stratify?
-
-    # Show random image.
-    # random_image = random.randint(0, len(images))
-    # plt.imshow(images[random_image])
-    # plt.title(f"Training example #{random_image}")
-    # plt.axis('off')
-    # plt.show()
 
     # Training data.
-    # trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
-    # trainset = torchvision.datasets.ImageNet(root='./data', train=True, download=True, transform=transform)
-    trainset = LFWDataset(train_X, train_Y)
+    transform = transforms.Compose([transforms.ToPILImage(), transforms.ToTensor()])
+    trainset = LFWDataset(train_X, train_Y, transform)
+    # for data in trainset:
+    #     print(np.shape(list(data)))
+    #     for tensor in data:
+    #         print(tensor.shape)
     trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=2)
 
-    # Test data.
-    # testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
-    # testset = torchvision.datasets.ImageNet(root='./data', train=False, download=True, transform=transform)
-    testset = LFWDataset(test_X, test_Y)
+    # Test data
+    testset = LFWDataset(test_X, test_Y, transform)
     testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=2)
 
     # Loss function.
@@ -266,11 +261,17 @@ def main():
     train(model, trainloader, criterion_mse, optimizer)
 
     # Save the trained network.
-    PATH = './colorize_cnn.pth'
-    torch.save(model.state_dict(), PATH)
+    torch.save(model.state_dict(), './colorize_cnn.pth')
 
     # Test the network.
-    test(model, testloader)
+    # test(model, testloader)
+
+    # Show random image.
+    # random_image = random.randint(0, len(images))
+    # plt.imshow(images[random_image])
+    # plt.title(f"Training example #{random_image}")
+    # plt.axis('off')
+    # plt.show()
 
 
 if __name__ == '__main__':
