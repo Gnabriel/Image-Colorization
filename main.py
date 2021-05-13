@@ -13,6 +13,7 @@ import sklearn
 from sklearn.model_selection import train_test_split
 import os
 from skimage import color
+from kmeans_init import *
 
 
 class ColorizationNet(nn.Module):
@@ -225,9 +226,9 @@ def main():
     model = ColorizationNet()
 
     # Parameters.
-    data_size = 300
+    data_size = 10
     batch_size = 1
-    learning_rate = 0.001
+    learning_rate = 0.001       # ADAM Standard
 
     # Load & preprocess images.
     l_images, ab_images = load_images(data_size)
@@ -255,7 +256,21 @@ def main():
     # criterion_mce = våran egen
 
     # Optimizer.
-    optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9)
+    optimizer = optim.Adam(
+        model.parameters(),
+        lr=learning_rate,
+        betas=(0.9, 0.99),
+        weight_decay=0.001)
+
+    # k-means initialization.
+    # for x in train_X:
+    #
+    train_X_tens = np.empty(train_X.shape[0], dtype='object')
+    for i in range(train_X.shape[0]):
+        train_X_tens[i] = transform(train_X[i])
+        # train_X_tens[i] = torch.from_numpy(train_X[i])
+    print(train_X_tens.shape)
+    kmeans_init(model, train_X_tens, num_iter=3, use_whitening=False)
 
     # Train the network.
     train(model, trainloader, criterion_mse, optimizer)
