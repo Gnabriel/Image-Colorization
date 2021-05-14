@@ -226,12 +226,20 @@ def main():
     model = ColorizationNet()
 
     # Parameters.
-    data_size = 10
+    data_size = 2
     batch_size = 1
     learning_rate = 0.001       # ADAM Standard
 
     # Load & preprocess images.
     l_images, ab_images = load_images(data_size)
+
+    ######################################################################
+    ######################################################################
+    ######################################################################
+    # TODO: discretizea l_images och ab_images till Q möjliga värden
+    ######################################################################
+    ######################################################################
+    ######################################################################
 
     # Split and shuffle training- and test sets.
     # train_X, test_X, train_Y, test_Y = train_test_split(l_images, ab_images, test_size=0.2, stratify=ab_images)
@@ -263,17 +271,18 @@ def main():
         weight_decay=0.001)
 
     # k-means initialization.
-    # for x in train_X:
-    #
     # train_X_tens = np.empty(train_X.shape[0], dtype='object')
     # for i in range(train_X.shape[0]):
     #     train_X_tens[i] = transform(train_X[i])
     #     # train_X_tens[i] = torch.from_numpy(train_X[i])
-    # print(train_X_tens.shape)
-    # kmeans_init(model, train_X_tens, num_iter=3, use_whitening=False)
+
+    kmeans_trainloader = torch.utils.data.DataLoader(trainset, batch_size=data_size, shuffle=True, num_workers=2)
+    for i, data in enumerate(kmeans_trainloader):
+        kmeans_inputs, kmeans_labels = data.copy()
+    kmeans_init(model, kmeans_inputs, num_iter=3, use_whitening=False)
 
     # Train the network.
-    train(model, trainloader, criterion_ce, optimizer)
+    train(model, trainloader, criterion_mse, optimizer)
 
     # Save the trained network.
     torch.save(model.state_dict(), './colorize_cnn.pth')
