@@ -39,7 +39,6 @@ class KMeansHook(object):
     def __call__(self, module, inputs):
         ## We follow step 1, 2 and 3of Coates and Ng, 2012
         ## https://www-cs.stanford.edu/~acoates/papers/coatesng_nntot2012.pdf
-
         x = inputs[0].detach()  # x is the same as x that appears in the paper
         if module.transposed:
             in_channels = module.in_channels
