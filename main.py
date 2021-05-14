@@ -265,15 +265,15 @@ def main():
     # k-means initialization.
     # for x in train_X:
     #
-    train_X_tens = np.empty(train_X.shape[0], dtype='object')
-    for i in range(train_X.shape[0]):
-        train_X_tens[i] = transform(train_X[i])
-        # train_X_tens[i] = torch.from_numpy(train_X[i])
-    print(train_X_tens.shape)
-    kmeans_init(model, train_X_tens, num_iter=3, use_whitening=False)
+    # train_X_tens = np.empty(train_X.shape[0], dtype='object')
+    # for i in range(train_X.shape[0]):
+    #     train_X_tens[i] = transform(train_X[i])
+    #     # train_X_tens[i] = torch.from_numpy(train_X[i])
+    # print(train_X_tens.shape)
+    # kmeans_init(model, train_X_tens, num_iter=3, use_whitening=False)
 
     # Train the network.
-    train(model, trainloader, criterion_mse, optimizer)
+    train(model, trainloader, criterion_ce, optimizer)
 
     # Save the trained network.
     torch.save(model.state_dict(), './colorize_cnn.pth')
