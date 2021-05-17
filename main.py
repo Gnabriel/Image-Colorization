@@ -14,6 +14,7 @@ from sklearn.model_selection import train_test_split
 import os
 from skimage import color
 from kmeans_init import *
+from sklearn import preprocessing
 
 
 class ColorizationNet(nn.Module):
@@ -156,23 +157,20 @@ def preprocess_image(image):
 
 
 def load_images(data_size):
-    all_people = os.listdir("./data/lfw")
-    l_images = np.empty((data_size, 256, 256))
-    ab_images = np.empty((data_size, 256, 256, 2))
-    i = 0
-    for folder_for_person in all_people:
-        all_images_on_person = os.listdir(f"./data/lfw/{folder_for_person}")
-        for image_on_person in all_images_on_person:
-            if i >= data_size:
-                break
-            img_as_array = np.asarray(Image.open(f"./data/lfw/{folder_for_person}/{image_on_person}"))
-            l_img, ab_img = preprocess_image(img_as_array)
-            l_images[i] = l_img
-            ab_images[i] = ab_img
-            i += 1
+    images = os.listdir("./data")
+    l_images = np.empty((data_size, 256*256))
+    ab_images = np.empty((data_size, 256*256, 2))
+    for i in range(data_size):
+            img_as_matrix = np.asarray(Image.open(f"./data/{images[i]}"))
+            l_img, ab_img = preprocess_image(img_as_matrix)
+            l_images[i] = np.reshape(l_img, newshape=np.size(l_img))    # Image as vector.
+            ab_images[i, :, 0] = np.reshape(ab_img[:, :, 0], newshape=np.size(ab_img[:, :, 0]))
+            ab_images[i, :, 1] = np.reshape(ab_img[:, :, 1], newshape=np.size(ab_img[:, :, 1]))
     # Convert from float64 to uint8
     l_images = (255 * l_images.astype(np.float64)).astype(np.uint8)
     ab_images = (255 * ab_images.astype(np.float64)).astype(np.uint8)
+
+    print("Data loaded.")
     return l_images, ab_images
 
 
@@ -194,11 +192,11 @@ def train(model, trainloader, criterion, optimizer):
             optimizer.step()
 
             # print statistics
-            # running_loss += loss.item()
-            # if i % 2000 == 1999:  # print every 2000 mini-batches
-            #     print('[%d, %5d] loss: %.3f' %
-            #           (epoch + 1, i + 1, running_loss / 2000))
-            #     running_loss = 0.0
+            running_loss += loss.item()
+            if i % 20 == 19:  # print every 2000 mini-batches
+                print('[%d, %5d] loss: %.3f' %
+                      (epoch + 1, i + 1, running_loss / 20))
+                running_loss = 0.0
 
     print('Finished Training')
 
@@ -222,24 +220,47 @@ def test(model, testloader):
 
 
 def main():
+    print(torch.cuda.is_available())
+
     # CNN.
     model = ColorizationNet()
 
     # Parameters.
-    data_size = 2
+    data_size = 40
     batch_size = 1
     learning_rate = 0.001       # ADAM Standard
+    Q = 300
 
     # Load & preprocess images.
     l_images, ab_images = load_images(data_size)
 
-    ######################################################################
-    ######################################################################
-    ######################################################################
-    # TODO: discretizea l_images och ab_images till Q möjliga värden
-    ######################################################################
-    ######################################################################
-    ######################################################################
+    # Discretize data.
+    # TODO: Fixa så att discretizer lägger värden i samma bins som gabbe&razzmus.
+    # l_images = l_images[:, 100:105]
+    # ab_images = ab_images[:, 100:105, :]
+    # print("--- L channel original ---")
+    # print(l_images)
+    # print("--- a channel original ---")
+    # print(ab_images[:, :, 0])
+    # print("--- b channel original ---")
+    # print(ab_images[:, :, 1])
+    discretizer = preprocessing.KBinsDiscretizer(n_bins=Q, encode='ordinal', strategy='uniform')      # TODO: Encode/strategy?
+    l_images = discretizer.fit_transform(l_images)
+    ab_images[:, :, 0] = discretizer.fit_transform(ab_images[:, :, 0])
+    ab_images[:, :, 1] = discretizer.fit_transform(ab_images[:, :, 1])
+    # print("--- L channel disc ---")
+    # print(l_images)
+    # print("--- a channel disc ---")
+    # print(ab_images[:, :, 0])
+    # print("--- b channel disc ---")
+    # print(ab_images[:, :, 1])
+
+    # Resize back to 256x256 images.
+    l_images = np.reshape(l_images, newshape=(data_size, 256, 256))
+    ab_images = np.reshape(ab_images, newshape=(data_size, 256, 256, 2))
+    # Convert from float64 to uint8.
+    l_images = (Q * l_images.astype(np.float64)).astype(np.uint8)       # TODO: Rätt med Q?
+    ab_images = (Q * ab_images.astype(np.float64)).astype(np.uint8)
 
     # Split and shuffle training- and test sets.
     # train_X, test_X, train_Y, test_Y = train_test_split(l_images, ab_images, test_size=0.2, stratify=ab_images)
