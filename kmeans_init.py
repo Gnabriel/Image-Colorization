@@ -22,7 +22,15 @@ def kmeans_init(net, input, num_iter=3, use_whitening=False):
     ## Step 2. Run forward pass of the images, in which the hooks will
     ## initialize the layer weights using k-means method
     ## Therefore, all the works are done in pre-hook and post-hook
-    net(input)
+    # net(input)
+
+    for i, data in enumerate(input, 0):
+        inputs, labels = data
+        # Load data to GPU if using Cuda.
+        if torch.cuda.is_available():
+            inputs = inputs.cuda()
+            labels = labels.cuda()
+            net(inputs)
 
     ## Step 3. Remove hooks
     [handle.remove() for handle in handles]

@@ -15,6 +15,7 @@ import os
 from skimage import color
 from kmeans_init import *
 from sklearn import preprocessing
+import pickle
 
 
 class ColorizationNet(nn.Module):
@@ -157,21 +158,60 @@ def preprocess_image(image):
 
 
 def load_images(data_size):
+    if os.path.isfile("pickles/lfw.p"):
+        l_images, ab_images = pickle.load(open("pickles/lfw.p", "rb"))
+        return l_images, ab_images
+
     images = os.listdir("./data")
-    l_images = np.empty((data_size, 256*256))
-    ab_images = np.empty((data_size, 256*256, 2))
+    l_images = np.empty((data_size, 256, 256))
+    ab_images = np.empty((data_size, 256, 256, 2))
     for i in range(data_size):
             img_as_matrix = np.asarray(Image.open(f"./data/{images[i]}"))
             l_img, ab_img = preprocess_image(img_as_matrix)
-            l_images[i] = np.reshape(l_img, newshape=np.size(l_img))    # Image as vector.
-            ab_images[i, :, 0] = np.reshape(ab_img[:, :, 0], newshape=np.size(ab_img[:, :, 0]))
-            ab_images[i, :, 1] = np.reshape(ab_img[:, :, 1], newshape=np.size(ab_img[:, :, 1]))
+            l_images[i] = l_img
+            ab_images[i] = ab_img
+            # l_images[i] = np.reshape(l_img, newshape=np.size(l_img))    # Image as vector.
+            # ab_images[i, :, 0] = np.reshape(ab_img[:, :, 0], newshape=np.size(ab_img[:, :, 0]))
+            # ab_images[i, :, 1] = np.reshape(ab_img[:, :, 1], newshape=np.size(ab_img[:, :, 1]))
+
+            if i % 50 == 49:  # print every 20 mini-batches
+                print("Loaded data nr.: " + str(i))
     # Convert from float64 to uint8
     l_images = (255 * l_images.astype(np.float64)).astype(np.uint8)
     ab_images = (255 * ab_images.astype(np.float64)).astype(np.uint8)
 
+    # pickle.dump((l_images, ab_images), open("pickles/lfw.p", "wb"))
+
     print("Data loaded.")
     return l_images, ab_images
+
+
+def discretize_images(ab_images):
+    discretized_ab_images = (ab_images + 110) // 10
+    discretized_ab_images = (discretized_ab_images * 10) - 110
+    return discretized_ab_images
+
+
+def discretized_ab_images_to_q(discretized_ab_images):      # TODO: Göra kopia av discretized_ab_images?
+    ab_dict = pickle.load(open("pickles/ab_to_q_index_dict.p", "rb"))
+
+    def ab_to_q_index(a_color, b_color):
+        color_key = f"({a_color}, {b_color})"
+        return ab_dict[color_key]
+    ab_images_to_q_index = np.vectorize(ab_to_q_index)
+    discretized_q_images = ab_images_to_q_index(discretized_ab_images[:, :, 0], discretized_ab_images[:, :, 1])
+    return discretized_q_images
+
+
+def one_hot_encode_labels(q_images, Q_vector):
+    q_images_flat = np.reshape(q_images, newshape=(q_images.shape[0], q_images.shape[1]*q_images.shape[2]))
+    enc = preprocessing.OneHotEncoder(categories=Q_vector)
+    Y_one_hot = enc.fit_transform(q_images_flat)
+    return Y_one_hot
+
+
+def weighted_loss(outputs, labels):
+    return torch.sum(outputs)
 
 
 def train(model, trainloader, criterion, optimizer):
@@ -181,6 +221,10 @@ def train(model, trainloader, criterion, optimizer):
         for i, data in enumerate(trainloader, 0):
             # get the inputs; data is a list of [inputs, labels]
             inputs, labels = data
+
+            # Load data to GPU if using Cuda.
+            if torch.cuda.is_available():
+                inputs, labels = inputs.cuda(), labels.cuda()
 
             # zero the parameter gradients
             optimizer.zero_grad()
@@ -192,11 +236,12 @@ def train(model, trainloader, criterion, optimizer):
             optimizer.step()
 
             # print statistics
-            running_loss += loss.item()
-            if i % 20 == 19:  # print every 2000 mini-batches
-                print('[%d, %5d] loss: %.3f' %
-                      (epoch + 1, i + 1, running_loss / 20))
-                running_loss = 0.0
+            # running_loss += loss.item()
+            if i % 50 == 49:  # print every 20 mini-batches
+                print("Epoch: " + str(epoch + 1) + ", Trained data: " + str(i*(len(inputs)) + 1))
+                # print('[%d, %5d] loss: %.3f' %
+                #       (epoch + 1, i + 1, running_loss / 20))
+                # running_loss = 0.0
 
     print('Finished Training')
 
@@ -208,6 +253,10 @@ def test(model, testloader):
     with torch.no_grad():
         for data in testloader:
             images, labels = data
+            # Load data to GPU if using Cuda.
+            if torch.cuda.is_available():
+                images, labels = images.cuda(), labels.cuda()
+
             # calculate outputs by running images through the network
             outputs = model(images)
             # the class with the highest energy is what we choose as prediction
@@ -220,47 +269,46 @@ def test(model, testloader):
 
 
 def main():
-    print(torch.cuda.is_available())
-
     # CNN.
     model = ColorizationNet()
 
+    if torch.cuda.is_available():
+        # model.to(torch.device("cuda:0"))
+        model = model.cuda()
+        torch.cuda.empty_cache()
+    print("Model on GPU: " + str(next(model.parameters()).is_cuda))
+
     # Parameters.
-    data_size = 40
+    # data_size = 13233
+    data_size = 100
     batch_size = 1
     learning_rate = 0.001       # ADAM Standard
-    Q = 300
+    Q_vector = np.arange(300)
+    Q = len(Q_vector)
 
     # Load & preprocess images.
     l_images, ab_images = load_images(data_size)
 
+    print(ab_images.shape)
+
     # Discretize data.
-    # TODO: Fixa så att discretizer lägger värden i samma bins som gabbe&razzmus.
-    # l_images = l_images[:, 100:105]
-    # ab_images = ab_images[:, 100:105, :]
-    # print("--- L channel original ---")
-    # print(l_images)
-    # print("--- a channel original ---")
-    # print(ab_images[:, :, 0])
-    # print("--- b channel original ---")
-    # print(ab_images[:, :, 1])
-    discretizer = preprocessing.KBinsDiscretizer(n_bins=Q, encode='ordinal', strategy='uniform')      # TODO: Encode/strategy?
-    l_images = discretizer.fit_transform(l_images)
-    ab_images[:, :, 0] = discretizer.fit_transform(ab_images[:, :, 0])
-    ab_images[:, :, 1] = discretizer.fit_transform(ab_images[:, :, 1])
-    # print("--- L channel disc ---")
-    # print(l_images)
-    # print("--- a channel disc ---")
-    # print(ab_images[:, :, 0])
-    # print("--- b channel disc ---")
-    # print(ab_images[:, :, 1])
+    ab_images = discretize_images(ab_images)
+    print(ab_images.shape)
+    ab_images = discretized_ab_images_to_q(ab_images)
+    print(ab_images.shape)
+    ab_images = one_hot_encode_labels(ab_images, Q_vector=Q_vector)
+    print(ab_images.shape)
+    # discretizer = preprocessing.KBinsDiscretizer(n_bins=Q, encode='ordinal', strategy='uniform')      # TODO: Encode/strategy?
+    # l_images = discretizer.fit_transform(l_images)
+    # ab_images[:, :, 0] = discretizer.fit_transform(ab_images[:, :, 0])
+    # ab_images[:, :, 1] = discretizer.fit_transform(ab_images[:, :, 1])
 
     # Resize back to 256x256 images.
-    l_images = np.reshape(l_images, newshape=(data_size, 256, 256))
-    ab_images = np.reshape(ab_images, newshape=(data_size, 256, 256, 2))
+    # l_images = np.reshape(l_images, newshape=(data_size, 256, 256))
+    # ab_images = np.reshape(ab_images, newshape=(data_size, 256, 256, 2))
     # Convert from float64 to uint8.
-    l_images = (Q * l_images.astype(np.float64)).astype(np.uint8)       # TODO: Rätt med Q?
-    ab_images = (Q * ab_images.astype(np.float64)).astype(np.uint8)
+    # l_images = (Q * l_images.astype(np.float64)).astype(np.uint8)       # TODO: Rätt med Q?
+    # ab_images = (Q * ab_images.astype(np.float64)).astype(np.uint8)
 
     # Split and shuffle training- and test sets.
     # train_X, test_X, train_Y, test_Y = train_test_split(l_images, ab_images, test_size=0.2, stratify=ab_images)
@@ -269,6 +317,7 @@ def main():
     # Training data.
     transform = transforms.Compose([transforms.ToPILImage(), transforms.ToTensor()])
     trainset = LFWDataset(train_X, train_Y, transform)
+
     # for data in trainset:
     #     print(np.shape(list(data)))
     #     for tensor in data:
@@ -282,7 +331,7 @@ def main():
     # Loss function.
     criterion_mse = nn.MSELoss()
     criterion_ce = nn.CrossEntropyLoss()
-    # criterion_mce = våran egen
+    criterion_wce = weighted_loss
 
     # Optimizer.
     optimizer = optim.Adam(
@@ -297,13 +346,15 @@ def main():
     #     train_X_tens[i] = transform(train_X[i])
     #     # train_X_tens[i] = torch.from_numpy(train_X[i])
 
-    kmeans_trainloader = torch.utils.data.DataLoader(trainset, batch_size=data_size, shuffle=True, num_workers=2)
-    for i, data in enumerate(kmeans_trainloader):
-        kmeans_inputs, kmeans_labels = data.copy()
-    kmeans_init(model, kmeans_inputs, num_iter=3, use_whitening=False)
+    # kmeans_trainloader = torch.utils.data.DataLoader(trainset, batch_size=data_size, shuffle=True, num_workers=2)
+    # for i, data in enumerate(kmeans_trainloader):
+    #     kmeans_inputs, kmeans_labels = data.copy()
+    #     if torch.cuda.is_available():
+    #         kmeans_inputs, kmeans_labels = kmeans_inputs.cuda(), kmeans_labels.cuda()
+    kmeans_init(model, trainloader, num_iter=3, use_whitening=False)
 
     # Train the network.
-    train(model, trainloader, criterion_mse, optimizer)
+    train(model, trainloader, criterion_wce, optimizer)
 
     # Save the trained network.
     torch.save(model.state_dict(), './colorize_cnn.pth')
