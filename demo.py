@@ -18,7 +18,7 @@ def demo():
     model.load_state_dict(torch.load('./colorize_cnn.pth'))
     model.eval()
 
-    image = np.asarray(Image.open(f"./data/lfw/Aaron_Eckhart/Aaron_Eckhart_0001.jpg"))
+    image = np.asarray(Image.open(f"./data/Aaron_Eckhart_0001.jpg"))
     l_image, ab_image = preprocess_image(image)
     l_tens = preprocess_demo_image(l_image)
 

@@ -175,7 +175,7 @@ def load_images(data_size):
             # ab_images[i, :, 1] = np.reshape(ab_img[:, :, 1], newshape=np.size(ab_img[:, :, 1]))
 
             if i % 50 == 49:  # print every 20 mini-batches
-                print("Loaded data nr.: " + str(i))
+                print("Loaded data nr.: " + str(i + 1))
     # Convert from float64 to uint8
     l_images = (255 * l_images.astype(np.float64)).astype(np.uint8)
     ab_images = (255 * ab_images.astype(np.float64)).astype(np.uint8)
@@ -187,9 +187,13 @@ def load_images(data_size):
 
 
 def discretize_images(ab_images):
-    discretized_ab_images = (ab_images + 110) // 10
-    discretized_ab_images = (discretized_ab_images * 10) - 110
-    return discretized_ab_images
+    print(ab_images[0])
+    print("-----------")
+    # discretized_ab_images = (ab_images + 110) // 10
+    # discretized_ab_images = (discretized_ab_images * 10) - 110
+    ab_images = np.floor_divide(ab_images, 10) * 10
+    print(ab_images[0])
+    return ab_images
 
 
 def discretized_ab_images_to_q(discretized_ab_images):      # TODO: Göra kopia av discretized_ab_images?
@@ -199,7 +203,7 @@ def discretized_ab_images_to_q(discretized_ab_images):      # TODO: Göra kopia 
         color_key = f"({a_color}, {b_color})"
         return ab_dict[color_key]
     ab_images_to_q_index = np.vectorize(ab_to_q_index)
-    discretized_q_images = ab_images_to_q_index(discretized_ab_images[:, :, 0], discretized_ab_images[:, :, 1])
+    discretized_q_images = ab_images_to_q_index(discretized_ab_images[:, :, :, 0], discretized_ab_images[:, :, :, 1])
     return discretized_q_images
 
 
@@ -283,7 +287,7 @@ def main():
     data_size = 100
     batch_size = 1
     learning_rate = 0.001       # ADAM Standard
-    Q_vector = np.arange(300)
+    Q_vector = np.arange(247)
     Q = len(Q_vector)
 
     # Load & preprocess images.
