@@ -45,6 +45,7 @@ def get_images(num_persons):
 def discretize_image(ab_image):
     return np.floor_divide(ab_image, 10) * 10
 
+
 def get_ab_colors_from_key(color_key):
     splitted_colors = color_key.split(",")
     a_color = int(splitted_colors[0][1:])
