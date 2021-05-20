@@ -26,6 +26,7 @@ class ColorizationNet(nn.Module):
         self.l_cent = 50.0
         self.l_norm = 100.0
         self.ab_norm = 110.0
+        self.Q = 247
 
         model1 = [nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1, bias=True), ]
         model1 += [nn.ReLU(True), ]
@@ -86,7 +87,7 @@ class ColorizationNet(nn.Module):
         model8 += [nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1, bias=True), ]
         model8 += [nn.ReLU(True), ]
 
-        model8 += [nn.Conv2d(256, 313, kernel_size=1, stride=1, padding=0, bias=True), ]
+        model8 += [nn.Conv2d(256, self.Q, kernel_size=1, stride=1, padding=0, bias=True), ]
 
         self.model1 = nn.Sequential(*model1)
         self.model2 = nn.Sequential(*model2)
@@ -98,7 +99,7 @@ class ColorizationNet(nn.Module):
         self.model8 = nn.Sequential(*model8)
 
         self.softmax = nn.Softmax(dim=1)
-        self.model_out = nn.Conv2d(313, 2, kernel_size=1, padding=0, dilation=1, stride=1, bias=False)
+        self.model_out = nn.Conv2d(self.Q, self.Q, kernel_size=1, padding=0, dilation=1, stride=1, bias=False)      # TODO: output Q eller 2 eller något helt jävla annat???
         self.upsample4 = nn.Upsample(scale_factor=4, mode='bilinear')
 
     def forward(self, input_l):
@@ -128,14 +129,18 @@ class ColorizationNet(nn.Module):
 
 
 class LFWDataset(Dataset):
-    def __init__(self, X, Y, transform):  # TODO: lägga till transform?
+    def __init__(self, X, Y, transform, ab_domain):  # TODO: lägga till transform?
         self.X = X
         self.Y = Y
         self.transform = transform
+        self.ab_domain = ab_domain
+        self.nearest_neighbors = neighbors.NearestNeighbors(n_neighbors=5, algorithm='ball_tree')
+        self.nearest_neighbors = self.nearest_neighbors.fit(ab_domain)
 
     def __getitem__(self, index):
         l_image, ab_image = self.X[index], self.Y[index]
-        return self.transform(l_image), self.transform(ab_image)
+        ab_image = ab_image_to_Z(ab_image, len(self.ab_domain), self.nearest_neighbors, sigma=5)
+        return self.transform(l_image), self.transform(ab_image).float()
 
     def __len__(self):
         return len(self.X)
@@ -171,14 +176,11 @@ def load_images(data_size):
         l_img, ab_img = preprocess_image(img_as_matrix)
         l_images[i] = l_img
         ab_images[i] = ab_img
-        # l_images[i] = np.reshape(l_img, newshape=np.size(l_img))    # Image as vector.
-        # ab_images[i, :, 0] = np.reshape(ab_img[:, :, 0], newshape=np.size(ab_img[:, :, 0]))
-        # ab_images[i, :, 1] = np.reshape(ab_img[:, :, 1], newshape=np.size(ab_img[:, :, 1]))
 
-        if i % 50 == 49:  # print every 20 mini-batches
+        if i % 50 == 49:  # print every 50 mini-batches
             print("Loaded data nr.: " + str(i + 1))
     # Convert from float64 to int8
-    l_images = l_images.astype(np.uint8)
+    l_images = l_images.astype(np.int8)
     ab_images = ab_images.astype(np.int8)
 
     # Save
@@ -212,40 +214,6 @@ def one_hot_encode_labels(q_images, Q_vector):
     return Y_one_hot
 
 
-def q_images_to_Z_old(q_images, Q):
-    ab_to_q_dict = pickle.load(open("pickles/ab_to_q_index_dict.p", "rb"))
-    q_to_ab_dict = pickle.load(open("pickles/q_index_to_ab_dict.p", "rb"))
-
-    def nn_gaussian(q):
-        q_vec = np.zeros(Q)
-        possible_neighbor_dists = np.array([[0, 10], [10, 0], [0, -10], [-10, 0],  # Closest neighbours
-                                   [10, 10], [10, -10], [-10, -10], [10, 10],  # Second closest
-                                   [0, 20], [20, 0], [0, -20], [-20, 0],  # Third closest
-                                   [10, 20], [20, 10], [20, -10], [10, -20], [-10, -20], [-20, -10], [-10, 20],
-                                   [-20, 10],  # Fourth closest
-                                   [20, 20], [20, -20], [-20, -20], [-20, 20]  # Fifth closest
-                                   ])
-        a, b = get_ab_colors_from_key(q_to_ab_dict[q])
-        neighbours_found = 0
-        for neighbor_dist in possible_neighbor_dists:
-            if neighbours_found >= 5:
-                break
-            neighbour_color = [a, b] + np.array(neighbor_dist)
-            neighbour_color_key = get_color_key(neighbour_color[0], neighbour_color[1])
-            if neighbour_color_key in ab_to_q_dict:
-                neighbours_found += 1
-                neighbour_q = ab_to_q_dict[neighbour_color_key]
-                q_vec[neighbour_q] = 1 / np.sqrt(neighbor_dist.dot(neighbor_dist))
-        q_vec /= np.sum(q_vec)
-        return q_vec
-
-    nn_gaussian_array = np.vectorize(nn_gaussian)
-    # Z_images = np.empty((q_images.shape[0], q_images.shape[1], q_images.shape[2], Q))
-    Z_images = np.reshape(q_images, newshape=(q_images.shape[0], q_images.shape[1], q_images.shape[2], Q))
-    Z_images = nn_gaussian_array(Z_images)
-    return Z_images
-
-
 def get_ab_domain(ab_to_q_dict):
     ab_domain_strings = list(ab_to_q_dict.keys())
     ab_domain = [list(get_ab_colors_from_key(ab_string)) for ab_string in ab_domain_strings]
@@ -253,12 +221,10 @@ def get_ab_domain(ab_to_q_dict):
     return ab_domain
 
 
-def q_images_to_Z(ab_images, Q, ab_domain, num_neighbors=5, sigma=5):
-    data_size, w, h = ab_images.shape[0], ab_images.shape[1], ab_images.shape[2]
-    nearest_neighbors = neighbors.NearestNeighbors(n_neighbors=num_neighbors, algorithm='ball_tree')
-    nearest_neighbors = nearest_neighbors.fit(ab_domain)
-    points = data_size * w * h
-    ab_images_flat = np.reshape(ab_images, (points, 2))
+def ab_image_to_Z(ab_image, Q, nearest_neighbors, sigma=5):
+    w, h = ab_image.shape[0], ab_image.shape[1]
+    points = w * h
+    ab_images_flat = np.reshape(ab_image, (points, 2))
     points_encoded_flat = np.empty((points, Q))
     points_indices = np.arange(0, points, dtype='int')[:, np.newaxis]
 
@@ -268,7 +234,7 @@ def q_images_to_Z(ab_images, Q, ab_domain, num_neighbors=5, sigma=5):
     gaussian_kernel = gaussian_kernel / np.sum(gaussian_kernel, axis=1)[:, np.newaxis]
 
     points_encoded_flat[points_indices, indices] = gaussian_kernel
-    points_encoded = np.reshape(points_encoded_flat, (data_size, w, h, Q))
+    points_encoded = np.reshape(points_encoded_flat, (w, h, Q))
     return points_encoded
 
 
@@ -277,22 +243,11 @@ def weighted_loss(outputs, labels):
 
 
 def train(model, trainloader, criterion, optimizer):
-
-    #Temp
-    ab_to_q_dict = pickle.load(open("pickles/ab_to_q_index_dict.p", "rb"))
-    Q = 247
-    ab_domain = get_ab_domain(ab_to_q_dict)
-
-
-
     for epoch in range(2):  # loop over the dataset multiple times
-
         running_loss = 0.0
         for i, data in enumerate(trainloader, 0):
             # get the inputs; data is a list of [inputs, labels]
             inputs, labels = data
-            print(labels.shape)
-            labels = q_images_to_Z(labels, Q, ab_domain)
 
             # Load data to GPU if using Cuda.
             if torch.cuda.is_available():
@@ -365,27 +320,20 @@ def main():
 
     # Discretize data.
     ab_images = discretize_images(ab_images)
-    print(ab_images.shape)
-    # q_images = discretized_ab_images_to_q(ab_images, ab_to_q_dict)
-    # ab_images = one_hot_encode_labels(ab_images, Q_vector=Q_vector)
-    # Z_images = q_images_to_Z(ab_images, Q, ab_domain)
-    # ab_images = Z_images
-
-    # Convert from float64 to uint8.
-    # l_images = l_images.astype(np.int8)
-    # ab_images = ab_images.astype(np.int8)
 
     # Split and shuffle training- and test sets.
     train_X, test_X, train_Y, test_Y = train_test_split(l_images, ab_images, test_size=0.2)
 
-    # Training data.
+    # Data transformer.
     # transform = transforms.Compose([transforms.ToPILImage(), transforms.ToTensor()])
     transform = transforms.Compose([transforms.ToTensor()])
-    trainset = LFWDataset(train_X, train_Y, transform)
+
+    # Training data.
+    trainset = LFWDataset(train_X, train_Y, transform, ab_domain)
     trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=2)
 
     # Test data
-    testset = LFWDataset(test_X, test_Y, transform)
+    testset = LFWDataset(test_X, test_Y, transform, ab_domain)
     testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=2)
 
     # Loss function.
@@ -401,17 +349,7 @@ def main():
         weight_decay=0.001)
 
     # k-means initialization.
-    # train_X_tens = np.empty(train_X.shape[0], dtype='object')
-    # for i in range(train_X.shape[0]):
-    #     train_X_tens[i] = transform(train_X[i])
-    #     # train_X_tens[i] = torch.from_numpy(train_X[i])
-
-    # kmeans_trainloader = torch.utils.data.DataLoader(trainset, batch_size=data_size, shuffle=True, num_workers=2)
-    # for i, data in enumerate(kmeans_trainloader):
-    #     kmeans_inputs, kmeans_labels = data.copy()
-    #     if torch.cuda.is_available():
-    #         kmeans_inputs, kmeans_labels = kmeans_inputs.cuda(), kmeans_labels.cuda()
-    # kmeans_init(model, trainloader, num_iter=3, use_whitening=False)
+    kmeans_init(model, trainloader, num_iter=3, use_whitening=False)
 
     # Train the network.
     train(model, trainloader, criterion_mse, optimizer)
@@ -421,13 +359,6 @@ def main():
 
     # Test the network.
     # test(model, testloader)
-
-    # Show random image.
-    # random_image = random.randint(0, len(images))
-    # plt.imshow(images[random_image])
-    # plt.title(f"Training example #{random_image}")
-    # plt.axis('off')
-    # plt.show()
 
 
 if __name__ == '__main__':

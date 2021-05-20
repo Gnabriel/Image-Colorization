@@ -34,6 +34,8 @@ def kmeans_init(net, input, num_iter=3, use_whitening=False):
 
     ## Step 3. Remove hooks
     [handle.remove() for handle in handles]
+
+    print("k-means initialization finished.")
     return net
 
 
