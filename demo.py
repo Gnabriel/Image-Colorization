@@ -1,74 +1,135 @@
+from scipy import ndimage
+
 from main import *
 
 
-def preprocess_demo_image(l_image):
-    l_image_tensor = torch.Tensor(l_image)[None, None, :, :]
-    return l_image_tensor
+def get_trained_CNN(data_size):
+    model = ColorizationNet()
+    model.load_state_dict(torch.load('./colorize_cnn_{}.pth'.format(data_size)))
+    model.eval()
+    print("Loaded CNN: colorize_cnn_{}".format(data_size))
+    return model
 
 
-def postprocess_tens(l_tens, out_ab):
-    out_lab_tens = torch.cat((l_tens, out_ab), dim=1)
-    out_lab = out_lab_tens.data.cpu().numpy()[0, ...].transpose((1, 2, 0))
-    out_rgb = color.lab2rgb(out_lab)
-    return out_lab, out_rgb
+def image_to_tens(image):
+    return torch.Tensor(image)[None, None, :, :]
+
+
+def encode_image(Z, ab_domain):
+    height, width, _ = Z.shape
+    final_ab = np.zeros((256, 256, 2))
+
+    nr_colors = 100000
+    Z__max_prob = np.argsort(-Z, axis=2)[:, :, :nr_colors]
+    print(Z__max_prob.shape)
+
+    for y in range(height):
+        for x in range(width):
+            non_zero_ab_domain_indices = np.nonzero(Z[y][x])[0]
+            for prob_nr, ab_domain_idx in enumerate(non_zero_ab_domain_indices):
+                #a_color, b_color = ab_domain[Z__max_prob[y][x][prob_nr]]
+                a_color, b_color = ab_domain[ab_domain_idx]
+                scalar = Z[y][x][ab_domain_idx]
+                if scalar < 0 or a_color < 0 or b_color < 0:
+                    print('Hallo')
+                final_ab[y][x][0] += a_color * scalar
+                final_ab[y][x][1] += b_color * scalar
+                #final_ab[y][x][0] += a_color / nr_colors
+                #final_ab[y][x][1] += b_color / nr_colors
+                # if prob_nr >= nr_colors:
+                #     break
+    return final_ab
+
+
+def H(Z, T, q_to_ab_dict):
+    # plt.plot(Z[35, 60, :])
+    # plt.show()
+
+    def f_T(Z):
+        Z = np.exp(np.log(Z) / T) / np.sum(np.exp(np.log(Z)) / T, axis=2)[:, :, np.newaxis]
+        return Z
+    Z = f_T(Z)
+
+
+    # plt.plot(Z[35, 60, :])
+    # plt.show()
+    # kirra "argmean"
+    # Z_mean = np.mean(Z, axis=2)
+
+    ab = np.empty((256, 256, 2))
+
+    # Det här är fel (blir som mode). Tar max bara för att testa =)
+    # argmax = np.argmax(Z, axis=2)
+    # ab = np.empty((256, 256, 2))
+    # for i in range(Z.shape[0]):
+    #     for j in range(Z.shape[1]):
+    #         q = argmax[i, j]
+    #         a, b = q_to_ab_dict[q]
+    #         ab[i, j, 0], ab[i, j, 1] = a, b\
+
+    for i in range(Z.shape[0]):
+        for j in range(Z.shape[1]):
+            center = np.round(ndimage.measurements.center_of_mass(Z[i, j, :]))[0]
+            a, b = q_to_ab_dict[center]
+            ab[i, j, 0], ab[i, j, 1] = a, b
+    return ab
+
+
+def postprocess_output(l_original, Z_output_tens, ab_domain, q_to_ab_dict, T):
+    Z_output_tens = torch.nn.functional.softmax(Z_output_tens, 1)
+    Z_output = Z_output_tens.detach().numpy()
+    Z_output = np.moveaxis(Z_output, 1, 3)[0]
+    ab_output = H(Z_output, T, q_to_ab_dict)
+
+    # ab_output = ab_output.astype(dtype=np.uint8)
+
+    lab_output = np.empty((l_original.shape[0], l_original.shape[1], 3))
+    lab_output[:, :, 0], lab_output[:, :, 1:] = l_original, ab_output
+    rgb_output = color.lab2rgb(lab_output)
+    return Z_output, lab_output, rgb_output
+
+
+def plot_images(original_rgb, output_rgb, T):
+    fig, axes = plt.subplots(ncols=2, figsize=(12, 4))
+    data = [('Original', original_rgb), ('Result (T={})'.format(T), output_rgb)]
+    for ax, (title, img) in zip(axes, data):
+        ax.set_title(title)
+        ax.imshow(img)
+        ax.axis('off')
+    fig.tight_layout()
+    plt.show()
 
 
 def demo():
-    model = ColorizationNet()
-    model.load_state_dict(torch.load('./colorize_cnn.pth'))
-    model.eval()
+    # Parameters.
+    data_size = 1000                                                                # TODO: Välj rätt size!
+    T = 1.0
 
-    image = np.asarray(Image.open(f"./data/Aaron_Eckhart_0001.jpg"))
-    l_image, ab_image = preprocess_image(image)
-    l_tens = preprocess_demo_image(l_image)
+    # Load trained and saved CNN model.
+    model = get_trained_CNN(data_size)
 
-    out_ab = model(l_tens).cpu()
-    out_lab, out_rgb = postprocess_tens(l_tens, out_ab)
-    print(out_ab[:, :, 0])
-    print(out_ab[:, :, 1])
-    # Original image rgb2lab2rgb
-    a_tens = preprocess_demo_image(ab_image[:, :, 0])
-    b_tens = preprocess_demo_image(ab_image[:, :, 1])
-    ab_tens = torch.cat((a_tens, b_tens), dim=1)
-    original_lab, original_rgb = postprocess_tens(l_tens, ab_tens)
+    # Load and pre-process demo image.
+    original_image = np.asarray(Image.open(f"./data/Vladimir_Putin_0033.jpg"))
+    l_original, ab_original = preprocess_image(original_image)
+    l_original_tens = image_to_tens(l_original)
+
+    # Load and get helpers.
+    ab_to_q_dict_unsorted = pickle.load(open("pickles/ab_to_q_index_dict_unsorted.p", "rb"))
+    ab_domain = get_ab_domain(data_size, ab_to_q_dict_unsorted)
+    ab_to_q_dict = get_ab_to_q_dict(data_size, ab_domain)
+    q_to_ab_dict = get_q_to_ab_dict(data_size, ab_to_q_dict)
+
+    # Get prediction for demo image by CNN.
+    Z_output_tens = model(l_original_tens).cpu()
+
+    # Post-process prediction.
+    Z_output, lab_output, rgb_output = postprocess_output(l_original, Z_output_tens, ab_domain, q_to_ab_dict, T)
+
+    # Plot images and color-channels.
+    plot_images(original_image, rgb_output, T)
 
     # Save the colored image.
-    plt.imsave('out_img.png', out_rgb)
-
-    plt.imshow(image)
-    plt.title('Original')
-    plt.axis('off')
-    plt.show()
-
-    plt.imshow(l_image, cmap='gray')
-    plt.title('Original (L channel)')
-    plt.axis('off')
-    plt.show()
-
-    # plt.imshow(out_lab[:, :, 0], cmap='gray')
-    # plt.title('Out channel 0')
-    # plt.axis('off')
-    # plt.show()
-    #
-    # plt.imshow(out_lab[:, :, 1])
-    # plt.title('Out channel 1')
-    # plt.axis('off')
-    # plt.show()
-    #
-    # plt.imshow(out_lab[:, :, 2])
-    # plt.title('Out channel 2')
-    # plt.axis('off')
-    # plt.show()
-
-    plt.imshow(out_rgb)
-    plt.title('Output (perfectly AI colored RGB)')
-    plt.axis('off')
-    plt.show()
-
-    plt.imshow(original_rgb)
-    plt.title('Original rgb2lab2rgb')
-    plt.axis('off')
-    plt.show()
+    plt.imsave('out_img.png', rgb_output)
 
 
 if __name__ == '__main__':
