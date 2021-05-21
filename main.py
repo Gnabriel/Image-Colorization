@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch.optim as optim
 import torch.nn as nn
+from scipy.ndimage import gaussian_filter
 from torch.utils.data import Dataset, DataLoader
 import torch.nn.functional as F
 from PIL import Image
@@ -99,6 +100,9 @@ class ColorizationNet(nn.Module):
         self.model8 = nn.Sequential(*model8)
 
         self.softmax = nn.Softmax(dim=1)
+        #################################################################################################################################
+        # TODO: HELT JÄVLA KUKFEL????????????????????? #############################################
+        ##############################################################################################################################
         self.model_out = nn.Conv2d(self.Q, self.Q, kernel_size=1, padding=0, dilation=1, stride=1, bias=False)      # TODO: output Q eller 2 eller något helt jävla annat???
         self.upsample4 = nn.Upsample(scale_factor=4, mode='bilinear')
 
@@ -164,8 +168,9 @@ def preprocess_image(image):
 
 
 def load_images(data_size):
-    if os.path.isfile("pickles/lfw.p"):
-        l_images, ab_images = pickle.load(open("pickles/lfw.p", "rb"))
+    if os.path.isfile("pickles/lfw_{}.p".format(data_size)):
+        print("Data loaded from pickle.")
+        l_images, ab_images = pickle.load(open("pickles/lfw_{}.p".format(data_size), "rb"))
         return l_images, ab_images
 
     images = os.listdir("./data")
@@ -184,7 +189,7 @@ def load_images(data_size):
     ab_images = ab_images.astype(np.int8)
 
     # Save
-    # pickle.dump((l_images, ab_images), open("pickles/lfw.p", "wb"))
+    pickle.dump((l_images, ab_images), open("pickles/lfw_{}.p".format(data_size), "wb"))
 
     print("Data loaded.")
     return l_images, ab_images
@@ -214,11 +219,62 @@ def one_hot_encode_labels(q_images, Q_vector):
     return Y_one_hot
 
 
-def get_ab_domain(ab_to_q_dict):
-    ab_domain_strings = list(ab_to_q_dict.keys())
+def get_ab_domain(data_size, ab_to_q_dict_unsorted):
+    if os.path.isfile("pickles/ab_domain_{}.p".format(data_size)):
+        ab_domain = pickle.load(open("pickles/ab_domain_{}.p".format(data_size), "rb"))
+        print("ab_domain loaded from pickle.")
+        return ab_domain
+
+    ab_domain_strings = list(ab_to_q_dict_unsorted.keys())
     ab_domain = [list(get_ab_colors_from_key(ab_string)) for ab_string in ab_domain_strings]
     ab_domain = sorted(ab_domain, key=lambda x: (x[0], x[1]))
+
+    print("ab_domain computed.")
+    pickle.dump(ab_domain, open("pickles/ab_domain_{}.p".format(data_size), "wb"))
     return ab_domain
+
+
+def get_ab_to_q_dict(data_size, ab_domain):
+    if os.path.isfile("pickles/ab_to_q_dict_{}.p".format(data_size)):
+        ab_to_q_dict = pickle.load(open("pickles/ab_to_q_dict_{}.p".format(data_size), "rb"))
+        print("ab_to_q_dict loaded from pickle.")
+        return ab_to_q_dict
+    q_values = np.arange(0, len(ab_domain))
+    ab_to_q_dict = dict(zip(map(tuple, ab_domain), q_values))
+    print("ab_to_q_dict computed.")
+    pickle.dump(ab_to_q_dict, open("pickles/ab_to_q_dict_{}.p".format(data_size), "wb"))
+    return ab_to_q_dict
+
+
+def get_q_to_ab_dict(data_size, ab_to_q_dict):
+    if os.path.isfile("pickles/q_to_ab_dict_{}.p".format(data_size)):
+        q_to_ab_dict = pickle.load(open("pickles/q_to_ab_dict_{}.p".format(data_size), "rb"))
+        print("q_to_ab_dict loaded from pickle.")
+        return q_to_ab_dict
+    ab_to_q_dict = ab_to_q_dict.copy()
+    q_to_ab_dict = {v: k for k, v in ab_to_q_dict.items()}
+    print("q_to_ab_dict computed.")
+    pickle.dump(q_to_ab_dict, open("pickles/q_to_ab_dict_{}.p".format(data_size), "wb"))
+    return q_to_ab_dict
+
+
+def get_p(data_size, ab_images, ab_to_q_dict, Q):
+    if os.path.isfile("pickles/p_matrix_{}.p".format(data_size)):
+        p = pickle.load(open("pickles/p_matrix_{}.p".format(data_size), "rb"))
+        print("p loaded from pickle.")
+        return p
+    data_size, w, h, _ = ab_images.shape
+    p = np.zeros(Q)
+
+    def add_on_index(ab):
+        q = ab_to_q_dict[tuple(ab)]
+        p[q] += 1
+
+    np.apply_along_axis(add_on_index, 3, ab_images)
+    p /= data_size * w * h
+    print("p computed.")
+    pickle.dump(p, open("pickles/p_matrix_{}.p".format(data_size), "wb"))
+    return p
 
 
 def ab_image_to_Z(ab_image, Q, nearest_neighbors, sigma=5):
@@ -238,11 +294,36 @@ def ab_image_to_Z(ab_image, Q, nearest_neighbors, sigma=5):
     return points_encoded
 
 
+def get_loss_weights(Z_tens, p_tilde_tens, Q, lam=0.5):
+    # Z_tens = torch.movedim(Z_tens, 1, 3)[0]
+    w = ((1 - lam) * p_tilde_tens + lam / Q) ** -1
+    w /= torch.sum(p_tilde_tens*w)
+    q_star_matrix = torch.argmax(Z_tens, 2)
+    weights = w[q_star_matrix]
+    return weights.cuda()
+
+
+def weighted_cross_entropy_loss(Z_hat_tens, Z_tens, p_tilde_tens, Q):      # TODO: Fixa så att den fungerar för flera bilder (mini-batches)
+    # Z_hat_tens, Z_tens = Z_hat_tens.cpu(), Z_tens.cpu()
+    # Z_hat, Z = Z_hat_tens.detach().numpy(), Z_tens.detach().numpy()
+    Z_hat_tens, Z_tens = torch.movedim(Z_hat_tens, 1, 3)[0], torch.movedim(Z_tens, 1, 3)[0]
+    weights = get_loss_weights(Z_tens, p_tilde_tens, Q)
+    loss = -torch.sum(weights * torch.sum(Z_tens * torch.log(Z_hat_tens), 2))
+    # print(loss)
+    return loss
+
+
+def soft_cross_entropy(outputs, labels):
+    # Source: https://discuss.pytorch.org/t/soft-cross-entropy-loss-tf-has-it-does-pytorch-have-it/69501/2
+    logprobs = torch.nn.functional.log_softmax(outputs, dim=1)          # TODO: Rätt dim ? ###################################################
+    return -(labels * logprobs).sum() / outputs.shape[0]
+
+
 def weighted_loss(outputs, labels):
     return torch.sum(outputs)
 
 
-def train(model, trainloader, criterion, optimizer):
+def train(model, trainloader, criterion, optimizer, p_tilde_tens, Q):
     for epoch in range(2):  # loop over the dataset multiple times
         running_loss = 0.0
         for i, data in enumerate(trainloader, 0):
@@ -258,7 +339,28 @@ def train(model, trainloader, criterion, optimizer):
 
             # forward + backward + optimize
             outputs = model(inputs)
-            loss = criterion(outputs, labels)
+            # loss = criterion(outputs, labels)
+
+            # Normalize output to probability distribution.
+            # outputs = torch.nn.functional.softmax(outputs, 1)           # TODO: Ändra till f_T istället för softmax?
+
+            # if epoch == 0 and i == 0:
+            #     print(labels.shape)
+            #     print(torch.sum(labels[0, :, 25, 40]))
+            #     print("--- label nonzero pixel ---")
+            #     print(labels[0, :, 25, 40])
+            #     print("--- outputs nonzero pixel ---")
+            #     print(outputs[0, :, 25, 40])
+
+            loss = criterion(outputs, labels, p_tilde_tens, Q)
+
+
+            # source: https://discuss.pytorch.org/t/how-to-assign-different-weights-for-cross-entropy-loss/56672
+            # weights = get_loss_weights(labels, p, Q)
+            # loss_array = soft_cross_entropy(outputs, labels)
+            # loss_array = criterion(outputs, labels.long())  # för nn.CrossEntropyLoss(reduction='none')
+            # loss = torch.mean(weights * loss_array)
+
             loss.backward()
             optimizer.step()
 
@@ -307,7 +409,7 @@ def main():
 
     # Parameters.
     # data_size = 13233
-    data_size = 100
+    data_size = 1000
     batch_size = 1
     learning_rate = 0.001  # ADAM Standard
     Q_vector = np.arange(247)
@@ -315,8 +417,9 @@ def main():
 
     # Load & preprocess images.
     l_images, ab_images = load_images(data_size)
-    ab_to_q_dict = pickle.load(open("pickles/ab_to_q_index_dict.p", "rb"))
-    ab_domain = get_ab_domain(ab_to_q_dict)
+    ab_to_q_dict_unsorted = pickle.load(open("pickles/ab_to_q_index_dict_unsorted.p", "rb"))
+    ab_domain = get_ab_domain(data_size, ab_to_q_dict_unsorted)
+    ab_to_q_dict = get_ab_to_q_dict(data_size, ab_domain)
 
     # Discretize data.
     ab_images = discretize_images(ab_images)
@@ -337,9 +440,24 @@ def main():
     testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=2)
 
     # Loss function.
-    criterion_mse = nn.MSELoss()
-    criterion_ce = nn.CrossEntropyLoss()
-    criterion_wce = weighted_loss
+    # criterion = nn.MSELoss()
+    # criterion = nn.CrossEntropyLoss(reduction='none')
+    criterion = weighted_cross_entropy_loss
+
+    p = get_p(data_size, ab_images, ab_to_q_dict, Q)
+    p_tilde = gaussian_filter(p, sigma=5)  # TODO: kolla resultat
+    p_tilde_tens = torch.tensor(p_tilde).cuda()
+
+    # TESTING CUSTOM LOSS FUNCTION
+    # for i, data in enumerate(trainloader, 0):
+    #     if i > 0:
+    #         break
+    #     inputs, labels = data
+    #     Z = labels.detach().numpy()
+    #     Z = np.moveaxis(Z, 1, 3)[0]
+    #     get_loss_weight(Z, p, Q)
+    # exit()
+    # /TESTING CUSTOM LOSS FUNCTION
 
     # Optimizer.
     optimizer = optim.Adam(
@@ -352,10 +470,10 @@ def main():
     kmeans_init(model, trainloader, num_iter=3, use_whitening=False)
 
     # Train the network.
-    train(model, trainloader, criterion_mse, optimizer)
+    train(model, trainloader, criterion, optimizer, p_tilde_tens, Q)
 
     # Save the trained network.
-    torch.save(model.state_dict(), './colorize_cnn.pth')
+    torch.save(model.state_dict(), './colorize_cnn_{}.pth'.format(data_size))
 
     # Test the network.
     # test(model, testloader)
