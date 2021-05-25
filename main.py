@@ -6,6 +6,7 @@ import numpy as np
 import torch.optim as optim
 import torch.nn as nn
 from scipy.ndimage import gaussian_filter
+import scipy
 from torch.utils.data import Dataset, DataLoader
 import torch.nn.functional as F
 from PIL import Image
@@ -127,7 +128,7 @@ class ColorizationNet(nn.Module):
 
         # out_reg = self.model_out(self.softmax(conv8_3))
         # print(conv8_3.shape)
-        out_reg = self.upsample4((self.softmax(conv8_3)))
+        out_reg = self.upsample4(self.softmax(conv8_3))
         # print(out_reg.shape)
         # print(out_reg[:, 123, 128])
         return out_reg
@@ -333,8 +334,8 @@ def f_T(Z):
     return Z
 
 
-def train(model, trainloader, batch_size, criterion, optimizer, p_tilde_tens, Q):
-    for epoch in range(2):  # loop over the dataset multiple times
+def train(model, trainloader, num_epochs, batch_size, criterion, optimizer, p_tilde_tens, Q):
+    for epoch in range(num_epochs):  # loop over the dataset multiple times
         running_loss = 0.0
         for i, data in enumerate(trainloader, 0):
             # get the inputs; data is a list of [inputs, labels]
@@ -370,7 +371,7 @@ def train(model, trainloader, batch_size, criterion, optimizer, p_tilde_tens, Q)
             # print statistics
             # running_loss += loss.item()
             if i % 50 == 49:  # print every 20 mini-batches
-                print("Epoch: " + str(epoch + 1) + ", Trained data: " + str(i * (len(inputs)) + 1))
+                print("Epoch: " + str(epoch + 1) + ", Trained data: " + str((i+1) * batch_size))
                 # print(torch.sum(outputs[0, :, 25, 40]))
                 # print(outputs[0, :, 25, 40])
                 # print('[%d, %5d] loss: %.3f' %
@@ -414,8 +415,9 @@ def main():
 
     # Parameters.
     # data_size = 13233
-    data_size = 100
-    batch_size = 1
+    data_size = 1000
+    batch_size = 10
+    num_epochs = 2
     learning_rate = 0.00003
     Q_vector = np.arange(247)
     Q = len(Q_vector)
@@ -438,11 +440,11 @@ def main():
 
     # Training data.
     trainset = LFWDataset(train_X, train_Y, transform, ab_domain)
-    trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=2)
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=1, pin_memory=True)
 
     # Test data
     testset = LFWDataset(test_X, test_Y, transform, ab_domain)
-    testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=2)
+    testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=1, pin_memory=True)
 
     # Loss function.
     # criterion = nn.MSELoss()
@@ -450,7 +452,7 @@ def main():
     criterion = weighted_cross_entropy_loss
 
     p = get_p(data_size, ab_images, ab_to_q_dict, Q)
-    p_tilde = gaussian_filter(p, sigma=5)  # TODO: kolla resultat
+    p_tilde = gaussian_filter(p, sigma=5)
     p_tilde_tens = torch.tensor(p_tilde).cuda()
 
     # Optimizer.
@@ -464,7 +466,7 @@ def main():
     # kmeans_init(model, trainloader, num_iter=3, use_whitening=False)
 
     # Train the network.
-    train(model, trainloader, batch_size, criterion, optimizer, p_tilde_tens, Q)
+    train(model, trainloader, num_epochs, batch_size, criterion, optimizer, p_tilde_tens, Q)
 
     # Save the trained network.
     if os.path.isfile('./colorize_cnn_{}.pth'.format(data_size)):
