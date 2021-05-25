@@ -9,6 +9,7 @@ from scipy.ndimage import gaussian_filter
 from torch.utils.data import Dataset, DataLoader
 import torch.nn.functional as F
 from PIL import Image
+from PIL import ImageCms
 import random
 from sklearn.model_selection import train_test_split
 import os
@@ -115,9 +116,25 @@ class ColorizationNet(nn.Module):
         conv6_3 = self.model6(conv5_3)
         conv7_3 = self.model7(conv6_3)
         conv8_3 = self.model8(conv7_3)
-        out_reg = self.model_out(self.softmax(conv8_3))
 
-        return self.unnormalize_ab(self.upsample4(out_reg))
+        # conv2_2 = self.model2(self.softmax(conv1_2))
+        # conv3_3 = self.model3(self.softmax(conv2_2))
+        # conv4_3 = self.model4(self.softmax(conv3_3))
+        # conv5_3 = self.model5(self.softmax(conv4_3))
+        # conv6_3 = self.model6(self.softmax(conv5_3))
+        # conv7_3 = self.model7(self.softmax(conv6_3))
+        # conv8_3 = self.model8(self.softmax(conv7_3))
+
+        # out_reg = self.model_out(self.softmax(conv8_3))
+        # print(conv8_3.shape)
+        out_reg = self.upsample4((self.softmax(conv8_3)))
+        # print(out_reg.shape)
+        # print(out_reg[:, 123, 128])
+        return out_reg
+
+        # Originale
+        # out_reg = self.model_out(self.softmax(conv8_3))
+        # return self.unnormalize_ab(self.upsample4(out_reg))
 
     def normalize_l(self, in_l):
         return (in_l - self.l_cent) / self.l_norm
@@ -259,8 +276,8 @@ def get_q_to_ab_dict(data_size, ab_to_q_dict):
 
 
 def get_p(data_size, ab_images, ab_to_q_dict, Q):
-    if os.path.isfile("pickles/p_matrix_{}.p".format(data_size)):
-        p = pickle.load(open("pickles/p_matrix_{}.p".format(data_size), "rb"))
+    if os.path.isfile("pickles/p_{}.p".format(data_size)):
+        p = pickle.load(open("pickles/p_{}.p".format(data_size), "rb"))
         print("p loaded from pickle.")
         return p
     data_size, w, h, _ = ab_images.shape
@@ -273,7 +290,7 @@ def get_p(data_size, ab_images, ab_to_q_dict, Q):
     np.apply_along_axis(add_on_index, 3, ab_images)
     p /= data_size * w * h
     print("p computed.")
-    pickle.dump(p, open("pickles/p_matrix_{}.p".format(data_size), "wb"))
+    pickle.dump(p, open("pickles/p_{}.p".format(data_size), "wb"))
     return p
 
 
@@ -295,35 +312,28 @@ def ab_image_to_Z(ab_image, Q, nearest_neighbors, sigma=5):
 
 
 def get_loss_weights(Z_tens, p_tilde_tens, Q, lam=0.5):
-    # Z_tens = torch.movedim(Z_tens, 1, 3)[0]
     w = ((1 - lam) * p_tilde_tens + lam / Q) ** -1
     w /= torch.sum(p_tilde_tens*w)
-    q_star_matrix = torch.argmax(Z_tens, 2)
+    q_star_matrix = torch.argmax(Z_tens, 1)
     weights = w[q_star_matrix]
     return weights.cuda()
 
 
-def weighted_cross_entropy_loss(Z_hat_tens, Z_tens, p_tilde_tens, Q):      # TODO: Fixa så att den fungerar för flera bilder (mini-batches)
-    # Z_hat_tens, Z_tens = Z_hat_tens.cpu(), Z_tens.cpu()
-    # Z_hat, Z = Z_hat_tens.detach().numpy(), Z_tens.detach().numpy()
-    Z_hat_tens, Z_tens = torch.movedim(Z_hat_tens, 1, 3)[0], torch.movedim(Z_tens, 1, 3)[0]
+def weighted_cross_entropy_loss(Z_hat_tens, Z_tens, batch_size, p_tilde_tens, Q):
+    eps = torch.tensor(0.0001).cuda()
+    # Z_hat_tens = torch.nn.functional.log_softmax(Z_hat_tens, 1)
     weights = get_loss_weights(Z_tens, p_tilde_tens, Q)
-    loss = -torch.sum(weights * torch.sum(Z_tens * torch.log(Z_hat_tens), 2))
-    # print(loss)
+    loss = -torch.sum(weights * torch.sum(Z_tens * torch.log(Z_hat_tens + eps), 1)) / batch_size
     return loss
 
 
-def soft_cross_entropy(outputs, labels):
-    # Source: https://discuss.pytorch.org/t/soft-cross-entropy-loss-tf-has-it-does-pytorch-have-it/69501/2
-    logprobs = torch.nn.functional.log_softmax(outputs, dim=1)          # TODO: Rätt dim ? ###################################################
-    return -(labels * logprobs).sum() / outputs.shape[0]
+def f_T(Z):
+    T = torch.tensor(0.38)
+    Z = torch.exp(torch.log(Z) / T) / torch.sum(torch.exp(torch.log(Z)) / T, 2).unsqueeze(2)
+    return Z
 
 
-def weighted_loss(outputs, labels):
-    return torch.sum(outputs)
-
-
-def train(model, trainloader, criterion, optimizer, p_tilde_tens, Q):
+def train(model, trainloader, batch_size, criterion, optimizer, p_tilde_tens, Q):
     for epoch in range(2):  # loop over the dataset multiple times
         running_loss = 0.0
         for i, data in enumerate(trainloader, 0):
@@ -334,32 +344,25 @@ def train(model, trainloader, criterion, optimizer, p_tilde_tens, Q):
             if torch.cuda.is_available():
                 inputs, labels = inputs.cuda(), labels.cuda()
 
+            # k-means init
+            # kmeans_init(model, inputs, num_iter=3, use_whitening=False)
+
             # zero the parameter gradients
-            optimizer.zero_grad()
+            optimizer.zero_grad()               # TODO: Vad fan händer här????????????????????????????????????????
 
             # forward + backward + optimize
             outputs = model(inputs)
-            # loss = criterion(outputs, labels)
+
+            # print("--- outputs shape ---")
+            # print(outputs.shape)
 
             # Normalize output to probability distribution.
             # outputs = torch.nn.functional.softmax(outputs, 1)           # TODO: Ändra till f_T istället för softmax?
+            # outputs = f_T(outputs)
 
-            # if epoch == 0 and i == 0:
-            #     print(labels.shape)
-            #     print(torch.sum(labels[0, :, 25, 40]))
-            #     print("--- label nonzero pixel ---")
-            #     print(labels[0, :, 25, 40])
-            #     print("--- outputs nonzero pixel ---")
-            #     print(outputs[0, :, 25, 40])
-
-            loss = criterion(outputs, labels, p_tilde_tens, Q)
-
-
-            # source: https://discuss.pytorch.org/t/how-to-assign-different-weights-for-cross-entropy-loss/56672
-            # weights = get_loss_weights(labels, p, Q)
-            # loss_array = soft_cross_entropy(outputs, labels)
-            # loss_array = criterion(outputs, labels.long())  # för nn.CrossEntropyLoss(reduction='none')
-            # loss = torch.mean(weights * loss_array)
+            # Loss function.
+            loss = criterion(outputs, labels, batch_size, p_tilde_tens, Q)        # Custom loss
+            # loss = criterion(outputs, labels)          # MSE
 
             loss.backward()
             optimizer.step()
@@ -368,6 +371,8 @@ def train(model, trainloader, criterion, optimizer, p_tilde_tens, Q):
             # running_loss += loss.item()
             if i % 50 == 49:  # print every 20 mini-batches
                 print("Epoch: " + str(epoch + 1) + ", Trained data: " + str(i * (len(inputs)) + 1))
+                # print(torch.sum(outputs[0, :, 25, 40]))
+                # print(outputs[0, :, 25, 40])
                 # print('[%d, %5d] loss: %.3f' %
                 #       (epoch + 1, i + 1, running_loss / 20))
                 # running_loss = 0.0
@@ -409,9 +414,9 @@ def main():
 
     # Parameters.
     # data_size = 13233
-    data_size = 1000
+    data_size = 100
     batch_size = 1
-    learning_rate = 0.001  # ADAM Standard
+    learning_rate = 0.00003
     Q_vector = np.arange(247)
     Q = len(Q_vector)
 
@@ -448,17 +453,6 @@ def main():
     p_tilde = gaussian_filter(p, sigma=5)  # TODO: kolla resultat
     p_tilde_tens = torch.tensor(p_tilde).cuda()
 
-    # TESTING CUSTOM LOSS FUNCTION
-    # for i, data in enumerate(trainloader, 0):
-    #     if i > 0:
-    #         break
-    #     inputs, labels = data
-    #     Z = labels.detach().numpy()
-    #     Z = np.moveaxis(Z, 1, 3)[0]
-    #     get_loss_weight(Z, p, Q)
-    # exit()
-    # /TESTING CUSTOM LOSS FUNCTION
-
     # Optimizer.
     optimizer = optim.Adam(
         model.parameters(),
@@ -467,12 +461,14 @@ def main():
         weight_decay=0.001)
 
     # k-means initialization.
-    kmeans_init(model, trainloader, num_iter=3, use_whitening=False)
+    # kmeans_init(model, trainloader, num_iter=3, use_whitening=False)
 
     # Train the network.
-    train(model, trainloader, criterion, optimizer, p_tilde_tens, Q)
+    train(model, trainloader, batch_size, criterion, optimizer, p_tilde_tens, Q)
 
     # Save the trained network.
+    if os.path.isfile('./colorize_cnn_{}.pth'.format(data_size)):
+        os.remove('./colorize_cnn_{}.pth'.format(data_size))
     torch.save(model.state_dict(), './colorize_cnn_{}.pth'.format(data_size))
 
     # Test the network.
