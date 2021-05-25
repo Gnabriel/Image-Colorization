@@ -12,43 +12,8 @@ class ColorizerTool:
         self.Z_hat = None
         self.height = height
         self.width = width
-        self.p = np.zeros((221, 221))
+        self.p = None
         self.images_limit = images_limit
-
-    # def set_possible_colors(self, save_files=False):
-    #     print()
-    #     print("--- Set Possible Colors ---")
-    #
-    #     all_people = os.listdir("./data")[:self.images_limit]
-    #
-    #     for idx, image_on_person in enumerate(all_people):
-    #         print(f"set image {idx+1}/{self.images_limit}")
-    #         rgb_image = np.array(Image.open(f"./data/{image_on_person}"))
-    #
-    #         l_image, ab_image = preprocess_image(rgb_image)
-    #         discretized_ab_image = discretize_image(ab_image)
-    #
-    #         for y in range(self.height):
-    #             for x in range(self.width):
-    #                 a_color = discretized_ab_image[y][x][0]
-    #                 b_color = discretized_ab_image[y][x][1]
-    #
-    #                 self.p[a_color][b_color] += 1
-    #                 color_key = f"({a_color}, {b_color})"
-    #
-    #                 if color_key not in self.ab_color_to_possible_color_idx:
-    #                     new_possible_colors_idx = len(self.possible_colors)
-    #                     self.possible_colors.append(color_key)
-    #                     self.ab_color_to_possible_color_idx[color_key] = new_possible_colors_idx
-    #                     self.possible_color_idx_to_ab_color[new_possible_colors_idx] = color_key
-    #
-    #     tot_ab_values = self.images_limit * self.height * self.width
-    #     self.p[self.p > 0] /= tot_ab_values
-    #     self.Q = len(self.possible_colors)
-    #
-    #     if save_files:
-    #         pickle.dump(self.p, open("pickles/p_matrix.p", "wb"))
-    #         pickle.dump(self.ab_color_to_possible_color_idx, open("pickles/ab_color_to_possible_color_idx.p", "wb"))
 
     def set_possible_colors(self, save_files=False):
         print()
@@ -78,14 +43,13 @@ class ColorizerTool:
 
         self.p[self.p > 0] /= self.images_limit * self.height * self.width
 
+
         self.Q = len(self.ab_color_to_possible_color_idx.keys())
 
         self.possible_color_idx_to_ab_color = {v: k for k, v in self.ab_color_to_possible_color_idx.items()}
 
         if save_files:
             pickle.dump(self.p, open("pickles/p_matrix.p", "wb"))
-            pickle.dump(self.ab_color_to_possible_color_idx, open("pickles/ab_to_q_index_dict.p", "wb"))
-            pickle.dump(self.possible_color_idx_to_ab_color, open("pickles/q_index_to_ab_dict.p", "wb"))
 
     def set_Z_hat(self, save_files=False):
         self.Z_hat = np.zeros((self.width, self.height, self.Q))
@@ -166,31 +130,8 @@ def main():
 
     colorizer_tool = ColorizerTool()
     colorizer_tool.set_possible_colors(save_files=True)
-    colorizer_tool.set_Z_hat(save_files=True)
-    colorizer_tool.get_weighted_Z(save_files=True)
+    print(colorizer_tool.p)
 
-    # l_images, ab_images = get_images(number_of_images_to_use)
-    # Z1 = colorizer_tool.get_Z_for_one_image(ab_images[0])
-    # Z1_loss = colorizer_tool.multinomial_cross_entropy_loss(Z1)
-
-    # print(f"Z1_loss = {Z1_loss}")
-
-    def ab_to_q_index(a_color, b_color):
-        color_key = f"({a_color}, {b_color})"
-        return colorizer_tool.ab_color_to_possible_color_idx[color_key]
-
-    # discrete_color_to_q_index = np.vectorize(ab_to_q_index)
-
-    # print(colorizer_tool.ab_color_to_possible_color_idx)
-
-
-    # print( discrete_color_to_q_index(discretized_ab_image[:,:,0], discretized_ab_image[:,:,1]) )
-    # plot_colors_in_use(colorizer_tool.possible_colors, number_of_images_to_use)
-
-    # Z1 = colorizer_tool.get_Z_for_one_image(ab_images[0])
-    # weighted_Z1 = colorizer_tool.get_weighted_Z(Z1)
-
-    # print(weighted_Z1)
 
 if __name__ == "__main__":
     main()

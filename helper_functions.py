@@ -2,6 +2,7 @@ from PIL import Image
 import numpy as np
 import os
 from skimage import color
+import torch
 
 
 def resize_image(image, h=256, w=256, resample=3):
@@ -61,5 +62,3 @@ def get_color_key(a_color, b_color):
 def print_dict(dict):
     for key in dict:
         print(f"{key} = {dict[key]}")
-
-
