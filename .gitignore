@@ -131,9 +131,9 @@ dmypy.json
 # PyCharm
 .idea/
 
-# Data
+# Data & Pickles
 data/
-pickles/lfw.p
+pickles/lfw*
 
 # Trained network
 *.pth
