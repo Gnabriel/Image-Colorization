@@ -89,7 +89,6 @@ class ColorizationNet(nn.Module):
         model8 += [nn.ReLU(True), ]
         model8 += [nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1, bias=True), ]
         model8 += [nn.ReLU(True), ]
-
         model8 += [nn.Conv2d(256, self.Q, kernel_size=1, stride=1, padding=0, bias=True), ]
 
         self.model1 = nn.Sequential(*model1)
@@ -295,6 +294,17 @@ def get_p(data_size, ab_images, ab_to_q_dict, Q):
     return p
 
 
+def get_train_test(data_size, l_images, ab_images, test_size=0.05):
+    if os.path.isfile("pickles/train_test_{}.p".format(data_size)):
+        train_X, test_X, train_Y, test_Y = pickle.load(open("pickles/train_test_{}.p".format(data_size), "rb"))
+        print("train_test loaded from pickle.")
+        return train_X, test_X, train_Y, test_Y
+    train_X, test_X, train_Y, test_Y = train_test_split(l_images, ab_images, test_size=test_size, shuffle=True)
+    print("train_test computed.")
+    pickle.dump((train_X, test_X, train_Y, test_Y), open("pickles/train_test_{}.p".format(data_size), "wb"))
+    return train_X, test_X, train_Y, test_Y
+
+
 def ab_image_to_Z(ab_image, Q, nearest_neighbors, sigma=5):
     w, h = ab_image.shape[0], ab_image.shape[1]
     points = w * h
@@ -334,9 +344,12 @@ def f_T(Z):
     return Z
 
 
-def train(model, trainloader, num_epochs, batch_size, criterion, optimizer, p_tilde_tens, Q):
+def train(model, trainloader, data_size, num_epochs, batch_size, criterion, optimizer, p_tilde_tens, Q):
+    current_epoch = 0
+    losses = []
     for epoch in range(num_epochs):  # loop over the dataset multiple times
         running_loss = 0.0
+        losses.append([])
         for i, data in enumerate(trainloader, 0):
             # get the inputs; data is a list of [inputs, labels]
             inputs, labels = data
@@ -345,17 +358,11 @@ def train(model, trainloader, num_epochs, batch_size, criterion, optimizer, p_ti
             if torch.cuda.is_available():
                 inputs, labels = inputs.cuda(), labels.cuda()
 
-            # k-means init
-            # kmeans_init(model, inputs, num_iter=3, use_whitening=False)
-
             # zero the parameter gradients
             optimizer.zero_grad()               # TODO: Vad fan händer här????????????????????????????????????????
 
             # forward + backward + optimize
             outputs = model(inputs)
-
-            # print("--- outputs shape ---")
-            # print(outputs.shape)
 
             # Normalize output to probability distribution.
             # outputs = torch.nn.functional.softmax(outputs, 1)           # TODO: Ändra till f_T istället för softmax?
@@ -364,19 +371,19 @@ def train(model, trainloader, num_epochs, batch_size, criterion, optimizer, p_ti
             # Loss function.
             loss = criterion(outputs, labels, batch_size, p_tilde_tens, Q)        # Custom loss
             # loss = criterion(outputs, labels)          # MSE
-
             loss.backward()
             optimizer.step()
 
-            # print statistics
-            # running_loss += loss.item()
-            if i % 50 == 49:  # print every 20 mini-batches
-                print("Epoch: " + str(epoch + 1) + ", Trained data: " + str((i+1) * batch_size))
-                # print(torch.sum(outputs[0, :, 25, 40]))
-                # print(outputs[0, :, 25, 40])
-                # print('[%d, %5d] loss: %.3f' %
-                #       (epoch + 1, i + 1, running_loss / 20))
-                # running_loss = 0.0
+            # Save losses.
+            losses[current_epoch].append(loss.item())
+
+            if i % 10 == 9:
+                print("Epoch: " + str(current_epoch + 1) + ", Trained data: " + str((i+1) * batch_size))
+        current_epoch += 1
+
+    if os.path.isfile('./losses_{}.pth'.format(data_size)):
+        os.remove('./losses_{}.pth'.format(data_size))
+    pickle.dump(losses, open("pickles/losses_{}.p".format(data_size), "wb"))
 
     print('Finished Training')
 
@@ -415,10 +422,10 @@ def main():
 
     # Parameters.
     # data_size = 13233
-    data_size = 1000
-    batch_size = 10
-    num_epochs = 2
-    learning_rate = 0.00003
+    data_size = 13233
+    batch_size = 5
+    num_epochs = 5
+    learning_rate = 0.0003
     Q_vector = np.arange(247)
     Q = len(Q_vector)
 
@@ -432,10 +439,9 @@ def main():
     ab_images = discretize_images(ab_images)
 
     # Split and shuffle training- and test sets.
-    train_X, test_X, train_Y, test_Y = train_test_split(l_images, ab_images, test_size=0.2)
+    train_X, test_X, train_Y, test_Y = get_train_test(data_size, l_images, ab_images, test_size=0.05)
 
     # Data transformer.
-    # transform = transforms.Compose([transforms.ToPILImage(), transforms.ToTensor()])
     transform = transforms.Compose([transforms.ToTensor()])
 
     # Training data.
@@ -466,7 +472,7 @@ def main():
     # kmeans_init(model, trainloader, num_iter=3, use_whitening=False)
 
     # Train the network.
-    train(model, trainloader, num_epochs, batch_size, criterion, optimizer, p_tilde_tens, Q)
+    train(model, trainloader, data_size, num_epochs, batch_size, criterion, optimizer, p_tilde_tens, Q)
 
     # Save the trained network.
     if os.path.isfile('./colorize_cnn_{}.pth'.format(data_size)):
