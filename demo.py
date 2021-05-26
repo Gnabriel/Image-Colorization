@@ -131,7 +131,7 @@ def plot_images(original_rgb, output_rgb, T, file_name, save_image):
 
 def demo():
     # Parameters.
-    data_size = 1000           # 13 233
+    data_size = 100           # 13 233
     T = 0.5
     save_images = False
 
