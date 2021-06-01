@@ -10,3 +10,4 @@ cross-entropy loss function produces much better results than a euclidian loss
 function. Although it has been trained for far fewer iterations, the model presented
 in this paper colorizes portrait images more realistically in 58% of the cases when
 compared to the model presented by R. Zhang et al. in [[1]](https://arxiv.org/abs/1603.08511) in a qualitative study.
+![results](https://user-images.githubusercontent.com/32018604/120300610-62b3ce80-c2cc-11eb-9f48-ba8cc9896350.png)
