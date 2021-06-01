@@ -135,6 +135,7 @@ dmypy.json
 data/
 data_imgnet/
 pickles/lfw*
+pickles/train_test*
 
 # Trained network
 *.pth
