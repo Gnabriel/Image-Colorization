@@ -369,15 +369,15 @@ def train(model, trainloader, data_size, num_epochs, batch_size, criterion, opti
             # outputs = f_T(outputs)
 
             # Loss function.
-            loss = criterion(outputs, labels, batch_size, p_tilde_tens, Q)        # Custom loss
-            # loss = criterion(outputs, labels)          # MSE
+            # loss = criterion(outputs, labels, batch_size, p_tilde_tens, Q)        # Custom loss
+            loss = criterion(outputs, labels)          # MSE
             loss.backward()
             optimizer.step()
 
             # Save losses.
             losses[current_epoch].append(loss.item())
 
-            if i % 10 == 9:
+            if i % 50 == 49:
                 print("Epoch: " + str(current_epoch + 1) + ", Trained data: " + str((i+1) * batch_size))
         current_epoch += 1
 
@@ -423,17 +423,16 @@ def main():
     # Parameters.
     # data_size = 13233
     data_size = 13233
-    batch_size = 5
-    num_epochs = 5
-    learning_rate = 0.0003
-    Q_vector = np.arange(247)
-    Q = len(Q_vector)
+    batch_size = 1
+    num_epochs = 2
+    learning_rate = 0.00003
 
     # Load & preprocess images.
     l_images, ab_images = load_images(data_size)
     ab_to_q_dict_unsorted = pickle.load(open("pickles/ab_to_q_index_dict_unsorted.p", "rb"))
     ab_domain = get_ab_domain(data_size, ab_to_q_dict_unsorted)
     ab_to_q_dict = get_ab_to_q_dict(data_size, ab_domain)
+    Q = len(ab_domain)
 
     # Discretize data.
     ab_images = discretize_images(ab_images)
@@ -453,9 +452,9 @@ def main():
     testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=1, pin_memory=True)
 
     # Loss function.
-    # criterion = nn.MSELoss()
+    criterion = nn.MSELoss()
     # criterion = nn.CrossEntropyLoss(reduction='none')
-    criterion = weighted_cross_entropy_loss
+    # criterion = weighted_cross_entropy_loss
 
     p = get_p(data_size, ab_images, ab_to_q_dict, Q)
     p_tilde = gaussian_filter(p, sigma=5)
