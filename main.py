@@ -1,28 +1,20 @@
-import torch
-import torchvision
 import torchvision.transforms as transforms
-import matplotlib.pyplot as plt
-import numpy as np
 import torch.optim as optim
 import torch.nn as nn
 from scipy.ndimage import gaussian_filter
-import scipy
-from torch.utils.data import Dataset, DataLoader
-import torch.nn.functional as F
-from PIL import Image
-from PIL import ImageCms
-import random
+from torch.utils.data import Dataset
 from sklearn.model_selection import train_test_split
-import os
-from skimage import color
-from kmeans_init import *
-from sklearn import preprocessing
 from sklearn import neighbors
 import pickle
 from helper_functions import *
 
 
 class ColorizationNet(nn.Module):
+    """
+    Credit:
+    Richard Zhang, Phillip Isola, and Alexei A Efros.  Colorful image colorization.  In Computer Vision – ECCV 2016,
+    Lecture Notes in Computer Science, pages 649–666, Cham, 2016. SpringerInternational Publishing.
+    """
     def __init__(self, norm_layer=nn.BatchNorm2d):
         super(ColorizationNet, self).__init__()
 
@@ -101,10 +93,7 @@ class ColorizationNet(nn.Module):
         self.model8 = nn.Sequential(*model8)
 
         self.softmax = nn.Softmax(dim=1)
-        #################################################################################################################################
-        # TODO: HELT JÄVLA KUKFEL????????????????????? #############################################
-        ##############################################################################################################################
-        self.model_out = nn.Conv2d(self.Q, self.Q, kernel_size=1, padding=0, dilation=1, stride=1, bias=False)      # TODO: output Q eller 2 eller något helt jävla annat???
+        self.model_out = nn.Conv2d(self.Q, self.Q, kernel_size=1, padding=0, dilation=1, stride=1, bias=False)
         self.upsample4 = nn.Upsample(scale_factor=4, mode='bilinear')
 
     def forward(self, input_l):
@@ -116,25 +105,8 @@ class ColorizationNet(nn.Module):
         conv6_3 = self.model6(conv5_3)
         conv7_3 = self.model7(conv6_3)
         conv8_3 = self.model8(conv7_3)
-
-        # conv2_2 = self.model2(self.softmax(conv1_2))
-        # conv3_3 = self.model3(self.softmax(conv2_2))
-        # conv4_3 = self.model4(self.softmax(conv3_3))
-        # conv5_3 = self.model5(self.softmax(conv4_3))
-        # conv6_3 = self.model6(self.softmax(conv5_3))
-        # conv7_3 = self.model7(self.softmax(conv6_3))
-        # conv8_3 = self.model8(self.softmax(conv7_3))
-
-        # out_reg = self.model_out(self.softmax(conv8_3))
-        # print(conv8_3.shape)
         out_reg = self.upsample4(self.softmax(conv8_3))
-        # print(out_reg.shape)
-        # print(out_reg[:, 123, 128])
         return out_reg
-
-        # Originale
-        # out_reg = self.model_out(self.softmax(conv8_3))
-        # return self.unnormalize_ab(self.upsample4(out_reg))
 
     def normalize_l(self, in_l):
         return (in_l - self.l_cent) / self.l_norm
@@ -150,7 +122,7 @@ class ColorizationNet(nn.Module):
 
 
 class LFWDataset(Dataset):
-    def __init__(self, X, Y, transform, ab_domain):  # TODO: lägga till transform?
+    def __init__(self, X, Y, transform, ab_domain):
         self.X = X
         self.Y = Y
         self.transform = transform
@@ -215,25 +187,6 @@ def load_images(data_size):
 def discretize_images(ab_images):
     ab_images = np.floor_divide(ab_images, 10) * 10
     return ab_images
-
-
-def discretized_ab_images_to_q(discretized_ab_images, ab_to_q_dict):  # TODO: Göra kopia av discretized_ab_images?
-    def ab_to_q_index(a_color, b_color):
-        color_key = f"({a_color}, {b_color})"
-        return ab_to_q_dict[color_key]
-
-    ab_images_to_q_index = np.vectorize(ab_to_q_index)
-    discretized_q_images = ab_images_to_q_index(discretized_ab_images[:, :, :, 0], discretized_ab_images[:, :, :, 1])
-    return discretized_q_images
-
-
-def one_hot_encode_labels(q_images, Q_vector):
-    q_images_flat = np.reshape(q_images, newshape=(q_images.shape[0], q_images.shape[1] * q_images.shape[2]))
-    Q_matrix = np.tile(Q_vector, (q_images_flat.shape[1], 1))
-    enc = preprocessing.OneHotEncoder(categories=Q_matrix)
-    Y_one_hot = enc.fit_transform(q_images_flat)
-    Y_one_hot = np.reshape(Y_one_hot, newshape=(100, 256, 256, 247))
-    return Y_one_hot
 
 
 def get_ab_domain(data_size, ab_to_q_dict_unsorted):
@@ -332,55 +285,48 @@ def get_loss_weights(Z_tens, p_tilde_tens, Q, lam=0.5):
 
 def weighted_cross_entropy_loss(Z_hat_tens, Z_tens, batch_size, p_tilde_tens, Q):
     eps = torch.tensor(0.0001).cuda()
-    # Z_hat_tens = torch.nn.functional.log_softmax(Z_hat_tens, 1)
     weights = get_loss_weights(Z_tens, p_tilde_tens, Q)
     loss = -torch.sum(weights * torch.sum(Z_tens * torch.log(Z_hat_tens + eps), 1)) / batch_size
     return loss
 
 
-def f_T(Z):
-    T = torch.tensor(0.38)
-    Z = torch.exp(torch.log(Z) / T) / torch.sum(torch.exp(torch.log(Z)) / T, 2).unsqueeze(2)
-    return Z
-
-
 def train(model, trainloader, data_size, num_epochs, batch_size, criterion, optimizer, p_tilde_tens, Q):
     current_epoch = 0
     losses = []
-    for epoch in range(num_epochs):  # loop over the dataset multiple times
-        running_loss = 0.0
+    # Loop over the dataset.
+    for epoch in range(num_epochs):
         losses.append([])
         for i, data in enumerate(trainloader, 0):
-            # get the inputs; data is a list of [inputs, labels]
             inputs, labels = data
 
             # Load data to GPU if using Cuda.
             if torch.cuda.is_available():
                 inputs, labels = inputs.cuda(), labels.cuda()
 
-            # zero the parameter gradients
-            optimizer.zero_grad()               # TODO: Vad fan händer här????????????????????????????????????????
+            # Zero parameter gradients.
+            optimizer.zero_grad()
 
-            # forward + backward + optimize
+            # Forward-pass.
             outputs = model(inputs)
 
-            # Normalize output to probability distribution.
-            # outputs = torch.nn.functional.softmax(outputs, 1)           # TODO: Ändra till f_T istället för softmax?
-            # outputs = f_T(outputs)
-
             # Loss function.
-            # loss = criterion(outputs, labels, batch_size, p_tilde_tens, Q)        # Custom loss
-            loss = criterion(outputs, labels)          # MSE
+            loss = criterion(outputs, labels, batch_size, p_tilde_tens, Q)          # Custom loss
+            # loss = criterion(outputs, labels)                                     # MSE
+
+            # Backward-pass.
             loss.backward()
+
             optimizer.step()
 
             # Save losses.
             losses[current_epoch].append(loss.item())
 
+            # Debugging.
             if i % 50 == 49:
                 print("Epoch: " + str(current_epoch + 1) + ", Trained data: " + str((i+1) * batch_size))
         current_epoch += 1
 
+    # Save losses.
     if os.path.isfile('./losses_{}.pth'.format(data_size)):
         os.remove('./losses_{}.pth'.format(data_size))
     pickle.dump(losses, open("pickles/losses_{}.p".format(data_size), "wb"))
@@ -388,34 +334,11 @@ def train(model, trainloader, data_size, num_epochs, batch_size, criterion, opti
     print('Finished Training')
 
 
-def test(model, testloader):
-    correct = 0
-    total = 0
-    # since we're not training, we don't need to calculate the gradients for our outputs
-    with torch.no_grad():
-        for data in testloader:
-            images, labels = data
-            # Load data to GPU if using Cuda.
-            if torch.cuda.is_available():
-                images, labels = images.cuda(), labels.cuda()
-
-            # calculate outputs by running images through the network
-            outputs = model(images)
-            # the class with the highest energy is what we choose as prediction
-            _, predicted = torch.max(outputs.data, 1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
-
-    print('Accuracy of the network on the 10000 test images: %d %%' % (
-            100 * correct / total))
-
-
 def main():
     # CNN.
     model = ColorizationNet()
 
     if torch.cuda.is_available():
-        # model.to(torch.device("cuda:0"))
         model = model.cuda()
         torch.cuda.empty_cache()
     print("Model on GPU: " + str(next(model.parameters()).is_cuda))
@@ -452,9 +375,8 @@ def main():
     testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=1, pin_memory=True)
 
     # Loss function.
-    criterion = nn.MSELoss()
-    # criterion = nn.CrossEntropyLoss(reduction='none')
-    # criterion = weighted_cross_entropy_loss
+    # criterion = nn.MSELoss()                          # MSE
+    criterion = weighted_cross_entropy_loss             # Custom loss
 
     p = get_p(data_size, ab_images, ab_to_q_dict, Q)
     p_tilde = gaussian_filter(p, sigma=5)
@@ -467,9 +389,6 @@ def main():
         betas=(0.9, 0.99),
         weight_decay=0.001)
 
-    # k-means initialization.
-    # kmeans_init(model, trainloader, num_iter=3, use_whitening=False)
-
     # Train the network.
     train(model, trainloader, data_size, num_epochs, batch_size, criterion, optimizer, p_tilde_tens, Q)
 
@@ -477,9 +396,6 @@ def main():
     if os.path.isfile('./colorize_cnn_{}.pth'.format(data_size)):
         os.remove('./colorize_cnn_{}.pth'.format(data_size))
     torch.save(model.state_dict(), './colorize_cnn_{}.pth'.format(data_size))
-
-    # Test the network.
-    # test(model, testloader)
 
 
 if __name__ == '__main__':
