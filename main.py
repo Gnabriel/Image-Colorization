@@ -1,3 +1,4 @@
+import torch
 import torchvision.transforms as transforms
 import torch.optim as optim
 import torch.nn as nn
@@ -6,7 +7,10 @@ from torch.utils.data import Dataset
 from sklearn.model_selection import train_test_split
 from sklearn import neighbors
 import pickle
-from helper_functions import *
+from PIL import Image
+import numpy as np
+import os
+from skimage import color
 
 
 class ColorizationNet(nn.Module):
@@ -187,6 +191,13 @@ def load_images(data_size):
 def discretize_images(ab_images):
     ab_images = np.floor_divide(ab_images, 10) * 10
     return ab_images
+
+
+def get_ab_colors_from_key(color_key):
+    splitted_colors = color_key.split(",")
+    a_color = int(splitted_colors[0][1:])
+    b_color = int(splitted_colors[1][1:-1])
+    return a_color, b_color
 
 
 def get_ab_domain(data_size, ab_to_q_dict_unsorted):
