@@ -14,3 +14,4 @@ compared to the model presented by R. Zhang et al. in [[1]](https://arxiv.org/ab
 See below for some examples of results of images colored by our model compared against the ground truth:
 
 ![results](https://user-images.githubusercontent.com/32018604/120300610-62b3ce80-c2cc-11eb-9f48-ba8cc9896350.png)
+
